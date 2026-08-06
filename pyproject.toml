@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cytos"
+version = "0.0.1"
+description = "Fast, read-only viewer for spatial biology: cell segmentation polygons over a large OME-Zarr morphology image."
+requires-python = ">=3.12"
+dependencies = [
+    "numpy",
+    "pygfx",
+    "wgpu",
+    "rendercanvas",
+    "PySide6",
+    "ome-zarr",
+    "zarr",
+    "tifffile",
+    "dask[array]",
+]
+
+[project.scripts]
+cytos-viewer = "cytos.cli:viewer"
+cytos-convert-ome-zarr = "cytos.cli:convert_ome_zarr"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cytos"]
