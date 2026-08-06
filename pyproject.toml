@@ -18,11 +18,14 @@ dependencies = [
     "tifffile",
     "dask[array]",
     "plotlet>=0.6.4",
+    "pyarrow",
+    "mapbox_earcut",
 ]
 
 [project.scripts]
 cytos-viewer = "cytos.cli:viewer"
 cytos-convert-ome-zarr = "cytos.cli:convert_ome_zarr"
+cytos-prep-polygons = "cytos.cli:prep_polygons"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cytos"]

@@ -1,0 +1,138 @@
+"""Cell segmentation polygon data model: ragged-array boundary geometry plus
+per-cell attributes. Pure numpy/pyarrow -- no pygfx/GPU dependency, see
+cytos.render for that (work-notes/plan.md Phase 1).
+
+Reprojects raw vertex coordinates into the same world space as
+cytos.core.image's PyramidLevel (world Y increasing upward) at load time, so
+everything downstream works in world space only -- see CLAUDE.md's note that
+raw Xenium boundary/cell Y stays row-major (world_y = -raw_y).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.parquet as pq
+import zarr
+
+
+@dataclass
+class Polygons:
+    coords: np.ndarray  # (M, 2) float32, world space, C-contiguous
+    offsets: np.ndarray  # (N+1,) uint32 -- polygon i = coords[offsets[i]:offsets[i+1]]
+    cell_id: np.ndarray  # (N,) uint32, dense 0..N-1 -- GPU vertex/LUT index (Phase 3)
+    features: pa.Table  # per-cell attributes, row i matches cell_id[i]; always has "id"
+
+
+def load_polygons(boundaries_path: Path, cells_path: Path | None = None) -> Polygons:
+    """Load a Xenium `*_boundaries.parquet` (long format: one row per vertex,
+    consecutive rows already grouped by cell -- verified against both the
+    kidney and breast-cancer bundles) into the ragged-array model.
+
+    If `cells_path` is given (e.g. `cells.parquet`), its per-cell attributes
+    are left-joined onto `features` by the dataset's original cell id
+    (string or int, whichever the bundle uses), restoring row order to match
+    `cell_id`/`offsets` afterward since Arrow joins don't preserve it.
+    """
+    table = pq.read_table(boundaries_path, columns=["cell_id", "vertex_x", "vertex_y"])
+    ids = table.column("cell_id").to_numpy(zero_copy_only=False)
+
+    run_start = np.empty(len(ids), dtype=bool)
+    run_start[0] = True
+    run_start[1:] = ids[1:] != ids[:-1]
+    starts = np.flatnonzero(run_start)
+    original_ids = pa.array(ids[starts])
+    offsets = np.append(starts, len(ids)).astype(np.uint32)
+
+    coords = np.empty((len(ids), 2), dtype=np.float32)
+    coords[:, 0] = table.column("vertex_x").to_numpy()
+    coords[:, 1] = -table.column("vertex_y").to_numpy()
+    coords = np.ascontiguousarray(coords)
+
+    cell_id = np.arange(len(original_ids), dtype=np.uint32)
+    features = pa.table({"id": original_ids})
+
+    if cells_path is not None:
+        cells = pq.read_table(cells_path)
+        cells = cells.rename_columns(["id" if c == "cell_id" else c for c in cells.column_names])
+        # cells.parquet's id column can differ in Arrow subtype from the
+        # boundaries file's (e.g. large_string vs. string) even when both
+        # hold the same values -- join() requires an exact type match.
+        cells = cells.set_column(cells.column_names.index("id"), "id", cells.column("id").cast(original_ids.type))
+        joined = features.join(cells, keys="id", join_type="left outer")
+        order = pc.index_in(joined.column("id"), original_ids)
+        features = joined.take(pc.sort_indices(order))
+
+    return Polygons(coords=coords, offsets=offsets, cell_id=cell_id, features=features)
+
+
+@dataclass
+class PolygonTileGrid:
+    """A `cytos.prep.polygons` cache: triangulated, Hilbert-sorted polygon
+    tiles at a single flat-grid depth (see that module for why one depth is
+    enough -- coarse zoom gets a raster stand-in instead, Phase 2/3). Reading
+    a tile is a cheap zarr array read, not a re-triangulation.
+    """
+
+    root: zarr.Group
+    tile_depth: int
+    world_bounds: tuple[float, float, float, float]  # (minx, miny, maxx, maxy), world space
+    n_cells: int
+
+    def tile_world_size(self) -> float:
+        minx, miny, maxx, maxy = self.world_bounds
+        return max(maxx - minx, maxy - miny) / (1 << self.tile_depth)
+
+    def tile(self, row: int, col: int) -> zarr.Group:
+        return self.root[f"tile/{self.tile_depth}/{row}/{col}"]
+
+
+def load_polygon_tile_grid(cache_dir: Path) -> PolygonTileGrid:
+    root = zarr.open_group(str(Path(cache_dir) / "tiles.zarr"), mode="r")
+    attrs = root.attrs
+    return PolygonTileGrid(
+        root=root,
+        tile_depth=int(attrs["tile_depth"]),
+        world_bounds=tuple(attrs["world_bounds"]),
+        n_cells=int(attrs["n_cells"]),
+    )
+
+
+def visible_polygon_tile_keys(
+    grid: PolygonTileGrid, world_rect: tuple[float, float, float, float]
+) -> list[tuple[int, int]]:
+    """world_rect = (minx, miny, maxx, maxy), world Y increasing upward --
+    same convention as `cytos.core.image.visible_chunk_keys`, but polygon
+    coords are already in world space (see `load_polygons`), so unlike that
+    function this needs no row/pixel flip. Returns (tile_row, tile_col) keys
+    for tiles that exist in the cache (tissue rarely fills its bounding
+    square, so most of the grid is empty)."""
+    minx, miny, maxx, maxy = world_rect
+    bminx, bminy, bmaxx, bmaxy = grid.world_bounds
+    n = 1 << grid.tile_depth
+    size = grid.tile_world_size()
+    if size <= 0:
+        return []
+
+    col0 = max(0, int((minx - bminx) / size))
+    col1 = min(n, int(np.ceil((maxx - bminx) / size)))
+    row0 = max(0, int((miny - bminy) / size))
+    row1 = min(n, int(np.ceil((maxy - bminy) / size)))
+    if col0 >= col1 or row0 >= row1:
+        return []
+
+    existing = grid.root["tile"][str(grid.tile_depth)]
+    keys = []
+    for row in range(row0, row1):
+        row_key = str(row)
+        if row_key not in existing:
+            continue
+        row_group = existing[row_key]
+        for col in range(col0, col1):
+            if str(col) in row_group:
+                keys.append((row, col))
+    return keys

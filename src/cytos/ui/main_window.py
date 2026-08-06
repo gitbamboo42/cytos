@@ -32,8 +32,10 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from rendercanvas.qt import loop
 
 from cytos.core.image import load_pyramid_levels, select_level
+from cytos.core.polygons import load_polygon_tile_grid
 from cytos.render.camera import effective_camera_view_size
 from cytos.render.image import COMPOSITE_COLORMAPS, TileCache
+from cytos.render.polygons import PolygonTileCache
 from cytos.ui.channel_panel import Channel, ChannelRow
 from cytos.ui.minimap import MinimapWidget, make_composite_thumbnail
 from cytos.ui.canvas_input import CanvasRenderWidget
@@ -64,6 +66,13 @@ def main() -> None:
         "(use File > Open Channel(s)… once it's up)",
     )
     parser.add_argument("--max-tiles", type=int, default=64, help="per channel")
+    parser.add_argument(
+        "--polygons",
+        default=None,
+        help="path to a cytos-prep-polygons cache directory (e.g. "
+        "data/xenium_breast_cancer_rep1/polygons_cache) — draws the cell "
+        "boundary layer over the image channels",
+    )
     args = parser.parse_args()
 
     specs = args.channel or []
@@ -100,13 +109,22 @@ def main() -> None:
         maxx, maxy = max(maxx, cx1), max(maxy, cy1)
         channels.append(ch)
 
+    polygon_cache = None
+    if args.polygons is not None:
+        polygon_grid = load_polygon_tile_grid(Path(args.polygons))
+        polygon_cache = PolygonTileCache(polygon_grid, max_tiles=args.max_tiles)
+        scene.add(polygon_cache.group)
+        px0, py0, px1, py1 = polygon_grid.world_bounds
+        minx, miny = min(minx, px0), min(miny, py0)
+        maxx, maxy = max(maxx, px1), max(maxy, py1)
+
     # Started with no channels (the common case now: pip doesn't ship data,
     # so the first real bounds come from whatever's opened via File > Open
     # once the window is up) — camera/minimap need *some* finite rect in the
     # meantime, and get properly re-fit the first time real data arrives
     # (see camera_fitted below).
-    camera_fitted = [bool(channels)]
-    if not channels:
+    camera_fitted = [bool(channels) or polygon_cache is not None]
+    if not channels and polygon_cache is None:
         minx, miny, maxx, maxy = -1.0, -1.0, 1.0, 1.0
 
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
@@ -130,6 +148,12 @@ def main() -> None:
 
     minimap.position_clicked.connect(on_minimap_click)
     dock_layout.addWidget(minimap)
+
+    if polygon_cache is not None:
+        polygons_checkbox = QtWidgets.QCheckBox("Cell boundaries")
+        polygons_checkbox.setChecked(True)
+        polygons_checkbox.toggled.connect(lambda v: setattr(polygon_cache.group, "visible", v))
+        dock_layout.addWidget(polygons_checkbox)
 
     visibility = {ch.name: True for ch in channels}
 
@@ -172,7 +196,7 @@ def main() -> None:
     stats_label.setWordWrap(False)
     stats_label.setFont(QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.SystemFont.FixedFont))
     stats_label.setFixedWidth(240)
-    stats_label.setMinimumHeight(20 * len(channels) + 20)
+    stats_label.setMinimumHeight(20 * (len(channels) + (1 if polygon_cache is not None else 0)) + 20)
     stats_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignLeft)
     dock_layout.addWidget(stats_label)
     dock_layout.addStretch()
@@ -256,6 +280,13 @@ def main() -> None:
             if level0 != last_level[0]:
                 print(f"level={level0} world_per_px={world_per_px:.4f}")
                 last_level[0] = level0
+
+        if polygon_cache is not None:
+            poly_stats = polygon_cache.update(world_rect)
+            poly_line = f"{'polygons':12s} n={poly_stats['needed']} c={poly_stats['cache_size']}"
+            latest_stats_text[0] = (
+                f"{latest_stats_text[0]}\n{poly_line}" if channels else poly_line
+            )
 
         renderer.render(scene, camera)
         render_widget.request_draw()
