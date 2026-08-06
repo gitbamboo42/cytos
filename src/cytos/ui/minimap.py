@@ -12,8 +12,10 @@ from cytos.ui.channel_panel import Channel
 
 def make_composite_thumbnail(channels: list[Channel], visibility: dict[str, bool]) -> np.ndarray:
     """Composite each channel's coarsest pyramid level (already small, already
-    loaded) the same way the main view does — tint by color, clip by clim,
-    additive sum — for a static preview image. Returns (H, W, 3) uint8."""
+    loaded) the same way the main view does — map through the channel's LUT,
+    clip by clim, additive sum — for a static preview image. Returns (H, W, 3)
+    uint8. Indexes `cache.lut_array` directly (the same array backing the GPU
+    texture), so this can't visually drift from the main view's colormap."""
     layers = []
     for ch in channels:
         if not visibility.get(ch.name, True):
@@ -21,9 +23,14 @@ def make_composite_thumbnail(channels: list[Channel], visibility: dict[str, bool
         arr = np.asarray(ch.levels[-1].data).astype(np.float32)
         lo, hi = ch.cache.clim
         norm = np.clip((arr - lo) / max(hi - lo, 1e-6), 0, 1)
-        color = np.array(ch.cache.color or (1, 1, 1), dtype=np.float32)
-        layers.append(norm[..., None] * color[None, None, :])
+        if ch.cache.lut_array is not None:
+            idx = (norm * 255).astype(np.uint8)
+            layers.append(ch.cache.lut_array[idx, :3])
+        else:
+            layers.append(np.repeat(norm[..., None], 3, axis=-1))
     if not layers:
+        if not channels:
+            return np.zeros((1, 1, 3), dtype=np.uint8)
         h, w = np.asarray(channels[0].levels[-1].data).shape
         return np.zeros((h, w, 3), dtype=np.uint8)
     composite = np.clip(sum(layers), 0, 1)
@@ -44,6 +51,12 @@ class MinimapWidget(QtWidgets.QWidget):
         self._view_rect: tuple[float, float, float, float] | None = None
         self.setMinimumHeight(180)
         self.setCursor(QtCore.Qt.CursorShape.CrossCursor)
+
+    def set_world_bounds(self, world_bounds: tuple[float, float, float, float]) -> None:
+        """Re-fit to new bounds — used once, the first time real data
+        arrives after starting with none (see cytos.ui.main_window)."""
+        self._world_bounds = world_bounds
+        self.update()
 
     def set_image(self, rgb: np.ndarray) -> None:
         h, w, _ = rgb.shape

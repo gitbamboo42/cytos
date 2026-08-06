@@ -68,6 +68,23 @@ while building the tool, not facts about the input data itself.
   those properties. Any world-space view rect derived from them directly is
   too narrow. Use `src/cytos/render/camera.py:effective_camera_view_size()`
   instead, everywhere a camera-driven view is needed.
+- **Sequential colormaps (matplotlib's `Blues`/`Greens`/`Reds`, vendored via
+  `plotlet`) anchor at near-white, not black.** Additive-blended composite
+  display (see the earlier fluorescence/autocontrast note) wants pixel value
+  0 to render as black background; a white-anchored colormap washes the
+  whole composite to gray instead. `src/cytos/render/image.py` registers its
+  own black->hue set (`blue`, `green`, `red`, `cyan`, `magenta`, `yellow`) via
+  `plotlet.register_colormap` at import time for this reason — don't default
+  composite channels to a matplotlib sequential colormap without checking its
+  0-end color first.
+- **Xenium `morphology_focus.ome.tif` doesn't always have a channel axis.**
+  Protein-panel bundles (e.g. `human_kidney_tiny/`) ship multi-channel
+  (`axes="CYX"`), but gene-only-panel bundles (e.g.
+  `xenium_breast_cancer_rep1/`) collapse to a single DAPI plane with
+  `axes="YX"` — no channel dimension at all. `series.asarray()[channel]`
+  silently mis-indexes that 2D array (grabs one *row*, not a channel plane)
+  instead of raising. `src/cytos/prep/pyramid.py` checks `series.axes` and
+  only indexes by channel when a channel axis actually exists.
 
 ## Environment
 

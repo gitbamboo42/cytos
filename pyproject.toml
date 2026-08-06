@@ -17,6 +17,7 @@ dependencies = [
     "zarr",
     "tifffile",
     "dask[array]",
+    "plotlet>=0.6.4",
 ]
 
 [project.scripts]

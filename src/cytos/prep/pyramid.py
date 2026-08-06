@@ -33,7 +33,20 @@ def main() -> None:
 
     with tifffile.TiffFile(args.tiff_path) as tif:
         series = tif.series[0]
-        plane = series.asarray()[args.channel]  # (Y, X) uint16
+        data = series.asarray()
+        if series.axes == "YX":
+            # No channel axis at all (SizeC=1 collapses to a plain 2D array
+            # in some Xenium pipeline versions, e.g. gene-only panels whose
+            # morphology_focus.ome.tif is DAPI-only) — unlike multi-channel
+            # bundles (axes "CYX"), there's nothing to index by channel.
+            if args.channel != 0:
+                raise ValueError(
+                    f"{args.tiff_path} has no channel axis (axes={series.axes!r}, "
+                    f"a single-channel file) — only --channel 0 is valid."
+                )
+            plane = data
+        else:
+            plane = data[args.channel]  # (Y, X) uint16
         px_size_x = px_size_y = None
         if tif.ome_metadata:
             import xml.etree.ElementTree as ET

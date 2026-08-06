@@ -12,21 +12,61 @@ from __future__ import annotations
 from collections import OrderedDict
 
 import numpy as np
+import plotlet
 import pygfx as gfx
 
 from cytos.core.image import PyramidLevel, visible_chunk_keys
 
+# Fluorescence composite display wants pixel value 0 -> black, not white:
+# plotlet's (matplotlib-derived) "Blues"/"Greens"/"Reds" run near-white ->
+# dark-color, which washes an additive-blended composite's background to
+# gray instead of black. Register the standard microscopy-viewer black->hue
+# set instead (same names/purpose as napari's SIMPLE_COLORMAPS). Plotlet
+# colormap registration is per-process, so this runs once at import time.
+_COMPOSITE_HUES = {
+    "blue": "#0000ff",
+    "green": "#00ff00",
+    "red": "#ff0000",
+    "cyan": "#00ffff",
+    "magenta": "#ff00ff",
+    "yellow": "#ffff00",
+}
+for _name, _hex in _COMPOSITE_HUES.items():
+    if _name not in plotlet.list_colormaps():
+        plotlet.register_colormap(_name, ["#000000", _hex])
 
-def _make_color_lut(color: tuple[float, float, float]) -> gfx.Texture:
-    """Black -> `color` linear ramp, the standard trick for tinting a grayscale
-    channel for multi-channel composite display (what Fiji/napari do)."""
-    ramp = np.linspace(0, 1, 256, dtype=np.float32)
-    lut = np.zeros((256, 4), dtype=np.float32)
-    lut[:, 0] = ramp * color[0]
-    lut[:, 1] = ramp * color[1]
-    lut[:, 2] = ramp * color[2]
-    lut[:, 3] = 1.0
-    return gfx.Texture(lut, dim=1)
+# Public: the registered names, in a stable order — for callers (e.g. the
+# "Open Channel(s)..." file dialog) that need to auto-assign a colormap per
+# newly loaded channel by cycling through them.
+COMPOSITE_COLORMAPS = list(_COMPOSITE_HUES.keys())
+
+# Curated defaults for the channel colormap picker: the black->hue composite
+# set above (plus plotlet's built-in "gray", already black->white) first,
+# since composite fluorescence display is cytos's primary use case, then a
+# handful of perceptual colormaps for single-channel/scientific viewing.
+# napari's own default dropdown is a similarly curated ~30 out of its full
+# catalog, not everything at once — see CLAUDE.md.
+CURATED_COLORMAPS = [
+    *_COMPOSITE_HUES.keys(),
+    "gray",
+    "viridis",
+    "magma",
+    "plasma",
+    "inferno",
+    "cividis",
+]
+
+
+def colormap_lut_array(name: str) -> np.ndarray:
+    """(256, 4) float32 RGBA in [0, 1] for a named plotlet colormap — the same
+    array backs both the GPU texture here and the CPU minimap thumbnail
+    (`cytos.ui.minimap`), so both read one LUT, not two independently-tinted
+    ramps that could drift apart."""
+    raw = plotlet.draw.colormap_lut(name)  # 768 bytes: 256 RGB uint8 triples
+    rgb = np.frombuffer(raw, dtype=np.uint8).reshape(256, 3).astype(np.float32) / 255.0
+    lut = np.ones((256, 4), dtype=np.float32)
+    lut[:, :3] = rgb
+    return lut
 
 
 # Additive: dst = src*1 + dst*1, so overlapping channels sum (blue + green =
@@ -48,9 +88,10 @@ class TileCache:
     scene as the camera moves. Reads chunks lazily via dask — only what's
     actually visible gets pulled off disk.
 
-    `color`, if given, tints this channel (black -> color ramp) and blends it
-    additively with whatever else is in the scene, for multi-channel composite
-    display. Leave as None for a plain grayscale single-channel layer.
+    `colormap`, if given (a name from `plotlet.list_colormaps()`), maps this
+    channel's intensity through that colormap and blends it additively with
+    whatever else is in the scene, for multi-channel composite display. Leave
+    as None for a plain grayscale single-channel layer.
     """
 
     def __init__(
@@ -58,13 +99,14 @@ class TileCache:
         levels: list[PyramidLevel],
         clim: tuple[float, float],
         max_tiles: int = 64,
-        color: tuple[float, float, float] | None = None,
+        colormap: str | None = None,
     ):
         self.levels = levels
         self.clim = clim
         self.max_tiles = max_tiles
-        self.color = color
-        self._lut = _make_color_lut(color) if color is not None else None
+        self.colormap = colormap
+        self.lut_array = colormap_lut_array(colormap) if colormap is not None else None
+        self._lut = gfx.Texture(self.lut_array, dim=1) if self.lut_array is not None else None
         self._group = gfx.Group()
         self._cache: OrderedDict[tuple[int, int, int], gfx.Image] = OrderedDict()
 
@@ -77,6 +119,14 @@ class TileCache:
         for image in self._cache.values():
             image.material.clim = clim
 
+    def set_colormap(self, colormap: str) -> None:
+        self.colormap = colormap
+        self.lut_array = colormap_lut_array(colormap)
+        self._lut = gfx.Texture(self.lut_array, dim=1)
+        for image in self._cache.values():
+            image.material.map = self._lut
+            image.material.alpha_config = _ADDITIVE_ALPHA_CONFIG
+
     def _make_tile(self, level: PyramidLevel, cy: int, cx: int) -> gfx.Image:
         h, w = level.shape
         ch, cw = level.chunk_shape
@@ -86,7 +136,7 @@ class TileCache:
 
         texture = gfx.Texture(chunk, dim=2)
         material = gfx.ImageBasicMaterial(clim=self.clim, map=self._lut)
-        if self.color is not None:
+        if self.colormap is not None:
             material.alpha_config = _ADDITIVE_ALPHA_CONFIG
         image = gfx.Image(gfx.Geometry(grid=texture), material)
         _, sx = level.scale
