@@ -4,8 +4,10 @@ names from cytos.render.image.CURATED_COLORMAPS) and additively blended — the
 standard multi-channel fluorescence display model (Fiji "composite" mode,
 napari additive blending).
 
-Each channel gets its own settings group in the dock panel: a colormap picker,
-a visibility checkbox, and contrast controls. All channels share one
+The dock panel groups by layer kind (Images, Segments, Points — see
+cytos.ui.collapsible_section), each section independently expandable. Every
+channel gets its own settings group under Images: a colormap picker, a
+visibility checkbox, and contrast controls. All channels share one
 camera/level-selection loop, since they're assumed to be spatially registered
 (same pyramid structure).
 
@@ -37,6 +39,7 @@ from cytos.render.camera import effective_camera_view_size
 from cytos.render.image import COMPOSITE_COLORMAPS, TileCache
 from cytos.render.polygons import PolygonTileCache
 from cytos.ui.channel_panel import Channel, ChannelRow
+from cytos.ui.collapsible_section import CollapsibleSection
 from cytos.ui.minimap import MinimapWidget, make_composite_thumbnail
 from cytos.ui.canvas_input import CanvasRenderWidget
 
@@ -78,6 +81,10 @@ def main() -> None:
     specs = args.channel or []
     channels: list[Channel] = []
     scene = gfx.Scene()
+    # An empty pygfx scene renders fully *transparent* black (alpha=0), not
+    # opaque black -- with every layer hidden that let the Qt panel's own
+    # background color show through the canvas instead of true black.
+    scene.add(gfx.Background(None, gfx.BackgroundMaterial("#000000")))
     minx = miny = float("inf")
     maxx = maxy = float("-inf")
 
@@ -141,6 +148,14 @@ def main() -> None:
 
     dock_widget = QtWidgets.QWidget()
     dock_layout = QtWidgets.QVBoxLayout(dock_widget)
+    # A collapsed CollapsibleSection's hidden content doesn't count toward
+    # the layout's width (Qt layouts ignore invisible children's size), so
+    # without a hard-pinned width the dock visibly grows the moment a wide
+    # section (e.g. a ChannelRow's colormap combo, measured at 317px) first
+    # expands. A *minimum* isn't enough -- Qt still grows the dock up to the
+    # expanded content's sizeHint; only a fixed width can't change at all.
+    # 340 clears the measured 317px with margin for longer colormap names.
+    dock_widget.setFixedWidth(340)
 
     minimap = MinimapWidget(world_bounds=(minx, miny, maxx, maxy))
     def on_minimap_click(wx: float, wy: float) -> None:
@@ -149,22 +164,48 @@ def main() -> None:
     minimap.position_clicked.connect(on_minimap_click)
     dock_layout.addWidget(minimap)
 
+    # Grouped by layer kind (napari groups its layer list by type too) so
+    # the panel reads as "what kinds of things can be on screen", not one
+    # flat, ever-growing stack of unrelated rows.
+    images_section = CollapsibleSection("Images")
+    dock_layout.addWidget(images_section)
+    segments_section = CollapsibleSection("Segments")
+    dock_layout.addWidget(segments_section)
+    # No points support yet (see work-notes/plan.md's non-goals) -- an empty,
+    # collapsed placeholder so the panel's shape doesn't change the day that
+    # changes, rather than conjuring the section into existence then.
+    points_section = CollapsibleSection("Points", expanded=False)
+    points_section.setEnabled(False)
+    dock_layout.addWidget(points_section)
+
+    # Segments currently holds exactly one layer (cell boundaries), so its
+    # own section checkbox *is* that layer's visibility control -- no
+    # separate per-layer row needed until there's more than one segment
+    # layer to distinguish between.
     if polygon_cache is not None:
-        polygons_checkbox = QtWidgets.QCheckBox("Cell boundaries")
-        polygons_checkbox.setChecked(True)
-        polygons_checkbox.toggled.connect(lambda v: setattr(polygon_cache.group, "visible", v))
-        dock_layout.addWidget(polygons_checkbox)
+        segments_section.visibility_changed.connect(lambda v: setattr(polygon_cache.group, "visible", v))
+    else:
+        segments_section.setEnabled(False)
 
     visibility = {ch.name: True for ch in channels}
 
     def refresh_minimap():
         minimap.set_image(make_composite_thumbnail(channels, visibility))
 
+    def on_images_section_visibility(section_visible: bool) -> None:
+        # A master switch layered on top of each channel's own visibility
+        # checkbox, not a replacement for it: turning the section back on
+        # restores each channel to whatever its own checkbox last said,
+        # rather than force-showing channels the user had individually hidden.
+        for ch in channels:
+            ch.cache.group.visible = section_visible and visibility.get(ch.name, True)
+
+    images_section.visibility_changed.connect(on_images_section_visibility)
+
     # New rows (initial or opened later) always insert right after the last
-    # row, ahead of the stats label + stretch added below — so
-    # dynamically-opened channels land in the right visual spot instead of
-    # after the stretch.
-    rows_insert_at = [dock_layout.count()]
+    # row in the Images section -- so dynamically-opened channels land in
+    # the right visual spot instead of after whatever comes next.
+    rows_insert_at = [images_section.content_layout.count()]
 
     def add_row(ch: Channel):
         intensity_max = float(np.asarray(ch.levels[-1].data).max()) * 1.2
@@ -184,8 +225,11 @@ def main() -> None:
             refresh_minimap()
 
         row.colormap_changed.connect(on_colormap)
-        dock_layout.insertWidget(rows_insert_at[0], row)
+        images_section.insert_widget(rows_insert_at[0], row)
         rows_insert_at[0] += 1
+        # A channel opened while the Images master switch is off should
+        # start hidden too, not fight the section checkbox it's under.
+        ch.cache.group.visible = images_section.is_checked()
 
     for ch in channels:
         add_row(ch)
@@ -239,7 +283,7 @@ def main() -> None:
 
         refresh_minimap()
 
-    dock = QtWidgets.QDockWidget("Channels", win)
+    dock = QtWidgets.QDockWidget("Layers", win)
     dock.setWidget(dock_widget)
     dock.setFeatures(
         QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetMovable
