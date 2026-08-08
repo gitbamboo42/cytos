@@ -38,11 +38,7 @@ import pygfx as gfx
 
 from cytos.core.polygons import PolygonTileGrid, visible_polygon_tile_keys
 from cytos.render.image import colormap_lut_array
-
-# 2D grid layout for the LUT (rather than a literal 1D texture) so it stays
-# well under GPU texture-dimension limits even at whole-slide cell counts
-# (millions) -- a 1D texture that wide wouldn't be allocatable.
-_LUT_WIDTH = 2048
+from cytos.render.lut import IdColorLut
 
 # Both layers sit just in front of the image tiles (z=0) so neither depends on
 # scene insertion order to land on top, and the outline sits in front of its
@@ -61,11 +57,6 @@ _FEATURE_PERCENTILES = (2.0, 98.0)
 # the DAPI/morphology image saturates to, so boundaries disappeared into the
 # bright parts of the image.
 DEFAULT_COLORMAP = "viridis"
-
-
-def _lut_shape(n_cells: int) -> tuple[int, int]:
-    height = max(1, -(-n_cells // _LUT_WIDTH))  # ceil div
-    return height, _LUT_WIDTH
 
 
 def feature_colors(values: np.ndarray, colormap: str) -> np.ndarray:
@@ -138,10 +129,7 @@ class PolygonTileCache:
         # the first update (the panel is built before the first frame draws).
         self._live: set[tuple[int, int]] = set()
 
-        height, width = _lut_shape(grid.n_cells)
-        self._lut_array = np.ones((height, width, 4), dtype=np.float32)
-        self._lut_texture = gfx.Texture(self._lut_array, dim=2)
-        self._lut_map = gfx.TextureMap(self._lut_texture, filter="nearest", wrap="clamp")
+        self._lut = IdColorLut(grid.n_cells)
         self._refresh_colors()
 
     @property
@@ -156,10 +144,7 @@ class PolygonTileCache:
         rows / `cytos.prep.polygons`'s `vertex_cell_id` -- the single
         recolor-by-feature operation, independent of how many tiles/vertices
         that touches on screen."""
-        height, width = self._lut_array.shape[:2]
-        flat = self._lut_array.reshape(height * width, 4)
-        flat[: len(colors)] = colors
-        self._lut_texture.update_full()
+        self._lut.set_colors(colors)
 
     def _refresh_colors(self) -> None:
         n = self.grid.n_cells
@@ -199,15 +184,6 @@ class PolygonTileCache:
 
     # -- tiles -------------------------------------------------------------
 
-    def _cell_id_to_uv(self, cell_ids: np.ndarray) -> np.ndarray:
-        height, width = self._lut_array.shape[:2]
-        col = (cell_ids % width).astype(np.float32)
-        row = (cell_ids // width).astype(np.float32)
-        uv = np.empty((len(cell_ids), 2), dtype=np.float32)
-        uv[:, 0] = (col + 0.5) / width
-        uv[:, 1] = (row + 0.5) / height
-        return uv
-
     def _make_outline(self, coords: np.ndarray, cell_ids: np.ndarray) -> gfx.Line:
         v = len(coords)
 
@@ -232,13 +208,13 @@ class PolygonTileCache:
         positions[0::2, :2] = coords
         positions[1::2, :2] = coords[next_idx]
         positions[:, 2] = _OUTLINE_Z
-        texcoords = np.repeat(self._cell_id_to_uv(cell_ids), 2, axis=0)
+        texcoords = np.repeat(self._lut.uv(cell_ids), 2, axis=0)
 
         geometry = gfx.Geometry(positions=positions, texcoords=texcoords)
         material = gfx.LineSegmentMaterial(
             thickness=self.thickness,
             thickness_space="screen",
-            map=self._lut_map,
+            map=self._lut.map,
             color_mode="vertex_map",
         )
         return gfx.Line(geometry, material)
@@ -253,9 +229,9 @@ class PolygonTileCache:
         geometry = gfx.Geometry(
             positions=positions,
             indices=indices.reshape(-1, 3).astype(np.uint32),
-            texcoords=self._cell_id_to_uv(cell_ids),
+            texcoords=self._lut.uv(cell_ids),
         )
-        material = gfx.MeshBasicMaterial(map=self._lut_map, color_mode="vertex_map")
+        material = gfx.MeshBasicMaterial(map=self._lut.map, color_mode="vertex_map")
         material.opacity = self.fill_opacity
         # Explicit over-operator blending rather than the "auto" default: the
         # image tiles below use a custom *additive* alpha config (see

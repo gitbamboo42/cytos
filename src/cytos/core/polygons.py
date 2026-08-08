@@ -19,6 +19,8 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 import zarr
 
+from cytos.core.tiling import tile_world_size, visible_tile_keys
+
 
 @dataclass
 class Polygons:
@@ -91,8 +93,7 @@ class PolygonTileGrid:
     features: pa.Table | None = None
 
     def tile_world_size(self) -> float:
-        minx, miny, maxx, maxy = self.world_bounds
-        return max(maxx - minx, maxy - miny) / (1 << self.tile_depth)
+        return tile_world_size(self.world_bounds, self.tile_depth)
 
     def tile(self, row: int, col: int) -> zarr.Group:
         return self.root[f"tile/{self.tile_depth}/{row}/{col}"]
@@ -144,31 +145,5 @@ def visible_polygon_tile_keys(
     """world_rect = (minx, miny, maxx, maxy), world Y increasing upward --
     same convention as `cytos.core.image.visible_chunk_keys`, but polygon
     coords are already in world space (see `load_polygons`), so unlike that
-    function this needs no row/pixel flip. Returns (tile_row, tile_col) keys
-    for tiles that exist in the cache (tissue rarely fills its bounding
-    square, so most of the grid is empty)."""
-    minx, miny, maxx, maxy = world_rect
-    bminx, bminy, bmaxx, bmaxy = grid.world_bounds
-    n = 1 << grid.tile_depth
-    size = grid.tile_world_size()
-    if size <= 0:
-        return []
-
-    col0 = max(0, int((minx - bminx) / size))
-    col1 = min(n, int(np.ceil((maxx - bminx) / size)))
-    row0 = max(0, int((miny - bminy) / size))
-    row1 = min(n, int(np.ceil((maxy - bminy) / size)))
-    if col0 >= col1 or row0 >= row1:
-        return []
-
-    existing = grid.root["tile"][str(grid.tile_depth)]
-    keys = []
-    for row in range(row0, row1):
-        row_key = str(row)
-        if row_key not in existing:
-            continue
-        row_group = existing[row_key]
-        for col in range(col0, col1):
-            if str(col) in row_group:
-                keys.append((row, col))
-    return keys
+    function this needs no row/pixel flip."""
+    return visible_tile_keys(grid.root, grid.tile_depth, grid.world_bounds, world_rect)

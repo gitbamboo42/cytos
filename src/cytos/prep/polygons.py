@@ -31,31 +31,7 @@ import pyarrow.parquet as pq
 import zarr
 
 from cytos.core.polygons import load_polygons
-
-_HILBERT_ORDER = 16  # bits/axis -- 65536x65536 grid, far finer than any real cell spacing
-
-
-def _hilbert_index(order: int, x: np.ndarray, y: np.ndarray) -> np.ndarray:
-    """Distance along a 2**order x 2**order Hilbert curve for each (x, y)
-    grid point. Standard iterative xy2d (Wikipedia), vectorized. Each
-    order-L quadtree quadrant maps to one contiguous range of the result --
-    that's the property tiling below relies on."""
-    n = 1 << order
-    x = x.astype(np.int64).copy()
-    y = y.astype(np.int64).copy()
-    d = np.zeros(x.shape, dtype=np.int64)
-    s = n >> 1
-    while s > 0:
-        rx = ((x & s) > 0).astype(np.int64)
-        ry = ((y & s) > 0).astype(np.int64)
-        d += s * s * ((3 * rx) ^ ry)
-        swap = ry == 0
-        flip = swap & (rx == 1)
-        x_new = np.where(flip, n - 1 - x, x)
-        y_new = np.where(flip, n - 1 - y, y)
-        x, y = np.where(swap, y_new, x_new), np.where(swap, x_new, y_new)
-        s >>= 1
-    return d
+from cytos.prep.tiling import HILBERT_ORDER as _HILBERT_ORDER, run_bounds, sort_and_tile
 
 
 def _reorder_ragged(flat: np.ndarray, offsets: np.ndarray, perm: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -116,12 +92,10 @@ def prep_polygons(
 
     minx, miny = polygons.coords[:, 0].min(), polygons.coords[:, 1].min()
     maxx, maxy = polygons.coords[:, 0].max(), polygons.coords[:, 1].max()
-    span = max(maxx - minx, maxy - miny)
-    grid_n = 1 << hilbert_order
-    gx = np.clip(((centroids[:, 0] - minx) / span * grid_n).astype(np.int64), 0, grid_n - 1)
-    gy = np.clip(((centroids[:, 1] - miny) / span * grid_n).astype(np.int64), 0, grid_n - 1)
-    d = _hilbert_index(hilbert_order, gx, gy)
-    perm = np.argsort(d, kind="stable")
+    world_bounds = (float(minx), float(miny), float(maxx), float(maxy))
+    perm, tile_row, tile_col, tile_depth = sort_and_tile(
+        centroids, world_bounds, tile_size, hilbert_order
+    )
 
     new_coords, new_offsets = _reorder_ragged(polygons.coords, offsets, perm)
     new_tri_local, new_tri_offsets = _reorder_ragged(tri_local_flat, tri_offsets, perm)
@@ -135,15 +109,8 @@ def prep_polygons(
     # LUT lookup (Phase 3) indexes a global color texture by.
     vertex_cell_id = np.repeat(np.arange(n_cells), new_vcounts).astype(np.uint32)
 
-    tile_depth = int(np.clip(round(np.log2(max(span / tile_size, 1.0))), 0, hilbert_order))
-    tile_row = (gy[perm] >> (hilbert_order - tile_depth)).astype(np.int64) if tile_depth else np.zeros(n_cells, np.int64)
-    tile_col = (gx[perm] >> (hilbert_order - tile_depth)).astype(np.int64) if tile_depth else np.zeros(n_cells, np.int64)
     tile_key = tile_row * (1 << tile_depth) + tile_col
-    run_start = np.empty(n_cells, dtype=bool)
-    run_start[0] = True
-    run_start[1:] = tile_key[1:] != tile_key[:-1]
-    cell_run_starts = np.flatnonzero(run_start)
-    cell_run_ends = np.append(cell_run_starts[1:], n_cells)
+    cell_run_starts, cell_run_ends = run_bounds(tile_key)
 
     if out_dir.exists():
         shutil.rmtree(out_dir)

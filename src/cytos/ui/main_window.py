@@ -15,6 +15,10 @@ Segments (cytos.ui.segment_panel) gets outline/fill toggles, a fill-opacity
 control, and a colormap spread over a per-cell measurement — cell_area by
 default, so cells are colored by their own data rather than by a fixed color.
 
+Points (cytos.ui.points_panel) draws transcript locations, colored one hue per
+gene, with a checkable gene list so a few genes can be shown at once in clearly
+different colors — the usual way these are read.
+
 Starts empty by default — pip doesn't ship any data with the package. Load
 channels either via --channel flags or File > Open Channel(s)… once the
 window is up.
@@ -38,13 +42,22 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from rendercanvas.qt import loop
 
 from cytos.core.image import load_pyramid_levels, select_level
+from cytos.core.points import load_point_tile_grid
 from cytos.core.polygons import load_polygon_tile_grid, numeric_feature_names
 from cytos.render.camera import effective_camera_view_size
 from cytos.render.image import COMPOSITE_COLORMAPS, TileCache
+from cytos.render.points import (
+    COLOR_MODE_FLAT,
+    COLOR_MODE_GENE,
+    DEFAULT_COLORMAP as POINT_DEFAULT_COLORMAP,
+    DEFAULT_PALETTE,
+    PointTileCache,
+)
 from cytos.render.polygons import DEFAULT_COLORMAP, PolygonTileCache
 from cytos.ui.channel_panel import Channel, ChannelRow
 from cytos.ui.collapsible_section import CollapsibleSection
 from cytos.ui.minimap import MinimapWidget, make_composite_thumbnail
+from cytos.ui.points_panel import PointsRow
 from cytos.ui.segment_panel import SegmentRow
 from cytos.ui.canvas_input import CanvasRenderWidget
 
@@ -107,6 +120,31 @@ def main() -> None:
         type=float,
         default=0.35,
         help="0-1, default 0.35 — kept low so the image underneath stays readable",
+    )
+    parser.add_argument(
+        "--points",
+        default=None,
+        help="path to a cytos-prep-points cache directory (e.g. "
+        "data/human_kidney_tiny/points_cache) — draws transcript locations as "
+        "points over the image and segment layers",
+    )
+    parser.add_argument(
+        "--point-size",
+        type=float,
+        default=3.0,
+        help="transcript dot size in screen pixels, default 3",
+    )
+    parser.add_argument(
+        "--point-palette",
+        default=DEFAULT_PALETTE,
+        help=f"qualitative palette for color-per-gene; default {DEFAULT_PALETTE}",
+    )
+    parser.add_argument(
+        "--point-one-color",
+        default=None,
+        metavar="COLORMAP",
+        help="draw every transcript in one color (top of this colormap) instead "
+        "of a color per gene",
     )
     args = parser.parse_args()
 
@@ -171,6 +209,26 @@ def main() -> None:
             f"segments: {polygon_grid.n_cells} cells, colormap={args.segment_colormap} "
             f"color_by={color_by or 'flat'}"
         )
+
+    point_cache = None
+    if args.points is not None:
+        point_grid = load_point_tile_grid(Path(args.points))
+        point_cache = PointTileCache(
+            point_grid,
+            max_tiles=args.max_tiles,
+            size=args.point_size,
+            color_mode=COLOR_MODE_FLAT if args.point_one_color else COLOR_MODE_GENE,
+            colormap=args.point_one_color or POINT_DEFAULT_COLORMAP,
+            palette=args.point_palette,
+        )
+        scene.add(point_cache.group)
+        tx0, ty0, tx1, ty1 = point_grid.world_bounds
+        minx, miny = min(minx, tx0), min(miny, ty0)
+        maxx, maxy = max(maxx, tx1), max(maxy, ty1)
+        print(
+            f"points: {point_grid.n_points} transcripts, {len(point_grid.gene_names)} genes, "
+            f"color={'flat ' + args.point_one_color if args.point_one_color else 'per gene (' + args.point_palette + ')'}"
+        )
         px0, py0, px1, py1 = polygon_grid.world_bounds
         minx, miny = min(minx, px0), min(miny, py0)
         maxx, maxy = max(maxx, px1), max(maxy, py1)
@@ -180,8 +238,9 @@ def main() -> None:
     # once the window is up) — camera/minimap need *some* finite rect in the
     # meantime, and get properly re-fit the first time real data arrives
     # (see camera_fitted below).
-    camera_fitted = [bool(channels) or polygon_cache is not None]
-    if not channels and polygon_cache is None:
+    has_data = bool(channels) or polygon_cache is not None or point_cache is not None
+    camera_fitted = [has_data]
+    if not has_data:
         minx, miny, maxx, maxy = -1.0, -1.0, 1.0, 1.0
 
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
@@ -221,11 +280,11 @@ def main() -> None:
     dock_layout.addWidget(images_section)
     segments_section = CollapsibleSection("Segments")
     dock_layout.addWidget(segments_section)
-    # No points support yet (see work-notes/plan.md's non-goals) -- an empty,
-    # collapsed placeholder so the panel's shape doesn't change the day that
-    # changes, rather than conjuring the section into existence then.
+    # Collapsed by default even when loaded: its gene list is by far the
+    # tallest thing in the panel, and the layer is legible on screen without
+    # it -- unlike Images/Segments, whose controls are the only way to tell
+    # what's being shown.
     points_section = CollapsibleSection("Points", expanded=False)
-    points_section.setEnabled(False)
     dock_layout.addWidget(points_section)
 
     # Segments currently holds exactly one layer (cell boundaries), so the
@@ -251,6 +310,31 @@ def main() -> None:
         segments_section.add_widget(segment_row)
     else:
         segments_section.setEnabled(False)
+
+    # Same shape as Segments: the section checkbox is the layer's master
+    # on/off, the row under it says how the dots look and which genes are
+    # drawn at all.
+    if point_cache is not None:
+        points_section.visibility_changed.connect(lambda v: setattr(point_cache.group, "visible", v))
+        points_row = PointsRow(
+            "Transcripts",
+            point_grid.gene_names,
+            point_grid.genes.column("count").to_pylist() if point_grid.genes is not None else [],
+            point_cache.color_mode,
+            point_cache.palette,
+            point_cache.colormap,
+            point_cache.size,
+            point_cache.opacity,
+        )
+        points_row.color_mode_changed.connect(point_cache.set_color_mode)
+        points_row.palette_changed.connect(point_cache.set_palette)
+        points_row.colormap_changed.connect(point_cache.set_colormap)
+        points_row.size_changed.connect(point_cache.set_size)
+        points_row.opacity_changed.connect(point_cache.set_opacity)
+        points_row.visible_genes_changed.connect(point_cache.set_visible_genes)
+        points_section.add_widget(points_row)
+    else:
+        points_section.setEnabled(False)
 
     visibility = {ch.name: True for ch in channels}
 
@@ -305,7 +389,8 @@ def main() -> None:
     stats_label.setWordWrap(False)
     stats_label.setFont(QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.SystemFont.FixedFont))
     stats_label.setFixedWidth(240)
-    stats_label.setMinimumHeight(20 * (len(channels) + (1 if polygon_cache is not None else 0)) + 20)
+    extra_layers = (1 if polygon_cache is not None else 0) + (1 if point_cache is not None else 0)
+    stats_label.setMinimumHeight(20 * (len(channels) + extra_layers) + 20)
     stats_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignLeft)
     dock_layout.addWidget(stats_label)
     dock_layout.addStretch()
@@ -390,12 +475,16 @@ def main() -> None:
                 print(f"level={level0} world_per_px={world_per_px:.4f}")
                 last_level[0] = level0
 
+        extra_lines = []
         if polygon_cache is not None:
             poly_stats = polygon_cache.update(world_rect)
-            poly_line = f"{'polygons':12s} n={poly_stats['needed']} c={poly_stats['cache_size']}"
-            latest_stats_text[0] = (
-                f"{latest_stats_text[0]}\n{poly_line}" if channels else poly_line
-            )
+            extra_lines.append(f"{'polygons':12s} n={poly_stats['needed']} c={poly_stats['cache_size']}")
+        if point_cache is not None:
+            pt_stats = point_cache.update(world_rect)
+            extra_lines.append(f"{'points':12s} n={pt_stats['needed']} c={pt_stats['cache_size']}")
+        if extra_lines:
+            joined = "\n".join(extra_lines)
+            latest_stats_text[0] = f"{latest_stats_text[0]}\n{joined}" if channels else joined
 
         renderer.render(scene, camera)
         render_widget.request_draw()
