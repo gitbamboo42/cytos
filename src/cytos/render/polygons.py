@@ -1,4 +1,4 @@
-"""Polygon-tile streaming: reads `cytos.prep.polygons`'s tiled zarr cache
+"""Polygon-tile streaming: reads `cytos.prep.polygons`'s tiled cache
 (already triangulated, Hilbert-sorted) and keeps a GPU-resident LRU cache of
 just the visible tiles as pygfx objects -- the same camera ->
 visible-tiles -> upload-new/evict-old loop as `cytos.render.image.TileCache`
@@ -244,17 +244,14 @@ class PolygonTileCache:
 
     def _make_tile(self, row: int, col: int) -> _Tile:
         tile = self.grid.tile(row, col)
-        coords = np.asarray(tile["coords"])
-        cell_ids = np.asarray(tile["vertex_cell_id"])
-        indices = np.asarray(tile["triangle_indices"])
 
         # Both objects are built up front, even when one is switched off:
         # toggling fill/outline then costs nothing, where building lazily
-        # would stall on a zarr read plus an upload for every visible tile at
+        # would stall on a tile read plus an upload for every visible tile at
         # the moment the checkbox is clicked.
         return _Tile(
-            outline=self._make_outline(coords, cell_ids),
-            fill=self._make_fill(coords, cell_ids, indices),
+            outline=self._make_outline(tile.coords, tile.vertex_cell_id),
+            fill=self._make_fill(tile.coords, tile.vertex_cell_id, tile.triangle_indices),
         )
 
     def _is_live(self, key: tuple[int, int]) -> bool:

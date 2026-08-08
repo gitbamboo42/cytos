@@ -26,7 +26,7 @@ class ChannelRow(QtWidgets.QGroupBox):
     visibility_changed = QtCore.Signal(bool)
     colormap_changed = QtCore.Signal(str)
 
-    def __init__(self, channel: Channel, intensity_max: float):
+    def __init__(self, channel: Channel, intensity_max: float, visible: bool = True):
         super().__init__(channel.name)
         layout = QtWidgets.QFormLayout(self)
 
@@ -35,7 +35,7 @@ class ChannelRow(QtWidgets.QGroupBox):
         layout.addRow("Colormap", self.cmap_combo)
 
         self.visible_check = QtWidgets.QCheckBox("Visible")
-        self.visible_check.setChecked(True)
+        self.visible_check.setChecked(visible)
         self.visible_check.toggled.connect(self.visibility_changed)
         layout.addRow(self.visible_check)
 
@@ -53,3 +53,22 @@ class ChannelRow(QtWidgets.QGroupBox):
 
     def _emit_clim(self):
         self.clim_changed.emit(self.low_spin.value(), self.high_spin.value())
+
+    def state(self) -> dict:
+        """What this row currently shows — the half of a saved session that
+        belongs to this layer. Mirrors `apply`."""
+        return {
+            "colormap": self.cmap_combo.currentText(),
+            "visible": self.visible_check.isChecked(),
+            "clim": [self.low_spin.value(), self.high_spin.value()],
+        }
+
+    def apply(self, colormap: str, visible: bool, clim: tuple[float, float]) -> None:
+        """Push a saved (or default) state back into the widgets. Each setter
+        re-emits this row's own signal, which is how the change reaches the
+        tile cache -- Qt only emits when a value actually differs, so restoring
+        an unchanged row costs nothing."""
+        self.cmap_combo.setCurrentText(colormap)
+        self.visible_check.setChecked(visible)
+        self.low_spin.setValue(float(clim[0]))
+        self.high_spin.setValue(float(clim[1]))

@@ -1,9 +1,10 @@
-"""Convert one channel of a Xenium morphology OME-TIFF into a real OME-Zarr (OME-NGFF)
+"""Convert one channel of a morphology OME-TIFF into a real OME-Zarr (OME-NGFF)
 multiscale pyramid.
 
-The bundle's morphology_focus/*.ome.tif files are OME-TIFF, not zarr — none of the
-Xenium output is actually OME-NGFF (see CLAUDE.md). This produces a real one to
-develop the image-loading path against.
+Xenium's `morphology_focus/*.ome.tif` files are OME-TIFF, not zarr — none of the
+Xenium output is actually OME-NGFF (see CLAUDE.md). This produces a real one, and
+it's what `cytos-import` calls to fill a bundle's `images/` when the source has
+no OME-Zarr of its own yet.
 
 Usage (installed as a console script, see pyproject.toml [project.scripts]):
     cytos-convert-ome-zarr \
@@ -24,14 +25,8 @@ from ome_zarr.writer import write_image
 from zarr import group as zarr_group
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("tiff_path", type=Path)
-    parser.add_argument("--channel", type=int, default=0)
-    parser.add_argument("--out", type=Path, required=True)
-    args = parser.parse_args()
-
-    with tifffile.TiffFile(args.tiff_path) as tif:
+def convert_ome_zarr(tiff_path: Path, out: Path, channel: int = 0, quiet: bool = False) -> Path:
+    with tifffile.TiffFile(tiff_path) as tif:
         series = tif.series[0]
         data = series.asarray()
         if series.axes == "YX":
@@ -39,14 +34,14 @@ def main() -> None:
             # in some Xenium pipeline versions, e.g. gene-only panels whose
             # morphology_focus.ome.tif is DAPI-only) — unlike multi-channel
             # bundles (axes "CYX"), there's nothing to index by channel.
-            if args.channel != 0:
+            if channel != 0:
                 raise ValueError(
-                    f"{args.tiff_path} has no channel axis (axes={series.axes!r}, "
-                    f"a single-channel file) — only --channel 0 is valid."
+                    f"{tiff_path} has no channel axis (axes={series.axes!r}, "
+                    f"a single-channel file) — only channel 0 is valid."
                 )
             plane = data
         else:
-            plane = data[args.channel]  # (Y, X) uint16
+            plane = data[channel]  # (Y, X) uint16
         px_size_x = px_size_y = None
         if tif.ome_metadata:
             import xml.etree.ElementTree as ET
@@ -57,14 +52,15 @@ def main() -> None:
             px_size_x = float(pixels.get("PhysicalSizeX"))
             px_size_y = float(pixels.get("PhysicalSizeY"))
 
-    print(f"plane shape: {plane.shape}, dtype: {plane.dtype}")
-    print(f"physical pixel size: {px_size_x} x {px_size_y} um")
+    if not quiet:
+        print(f"plane shape: {plane.shape}, dtype: {plane.dtype}")
+        print(f"physical pixel size: {px_size_x} x {px_size_y} um")
 
-    if args.out.exists():
-        shutil.rmtree(args.out)
-    args.out.parent.mkdir(parents=True, exist_ok=True)
+    if out.exists():
+        shutil.rmtree(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
 
-    store = parse_url(str(args.out), mode="w").store
+    store = parse_url(str(out), mode="w").store
     root = zarr_group(store=store)
     write_image(
         image=plane,
@@ -75,7 +71,18 @@ def main() -> None:
         storage_options=dict(chunks=(1024, 1024)),
     )
 
-    print(f"wrote {args.out}")
+    if not quiet:
+        print(f"wrote {out}")
+    return out
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("tiff_path", type=Path)
+    parser.add_argument("--channel", type=int, default=0)
+    parser.add_argument("--out", type=Path, required=True)
+    args = parser.parse_args()
+    convert_ome_zarr(args.tiff_path, args.out, channel=args.channel)
 
 
 if __name__ == "__main__":

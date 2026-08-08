@@ -24,9 +24,8 @@ dependencies = [
 
 [project.scripts]
 cytos-viewer = "cytos.cli:viewer"
+cytos-import = "cytos.cli:import_bundle"
 cytos-convert-ome-zarr = "cytos.cli:convert_ome_zarr"
-cytos-prep-polygons = "cytos.cli:prep_polygons"
-cytos-prep-points = "cytos.cli:prep_points"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cytos"]

@@ -52,8 +52,17 @@ class PyramidLevel:
 
 
 def load_pyramid_levels(path: Path) -> list[PyramidLevel]:
-    reader = Reader(parse_url(str(path)))
-    node = list(reader())[0]
+    # parse_url returns None for anything that isn't a zarr store, and
+    # ome_zarr's Reader then asserts on it -- an AttributeError deep in a
+    # dependency, with no mention of the path that caused it. Anyone can point
+    # a file dialog at the wrong folder, so say what's actually wrong.
+    url = parse_url(str(path))
+    if url is None:
+        raise ValueError(f"{path}: not an OME-Zarr image — no zarr store there")
+    nodes = list(Reader(url)())
+    if not nodes:
+        raise ValueError(f"{path}: a zarr store, but holds no OME-Zarr image")
+    node = nodes[0]
     transforms = node.metadata["coordinateTransformations"]
     levels = []
     for i, data in enumerate(node.data):

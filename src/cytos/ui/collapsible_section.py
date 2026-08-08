@@ -68,6 +68,17 @@ class CollapsibleSection(QtWidgets.QWidget):
     def is_checked(self) -> bool:
         return self._visible_check.isChecked()
 
+    def is_expanded(self) -> bool:
+        return self._expand_button.isChecked()
+
+    def apply(self, expanded: bool, checked: bool) -> None:
+        """Restore both controls (saved session, or reset to defaults). Setting
+        the checkbox re-emits `visibility_changed`, which is what pushes the
+        change through to the layers -- so this must run after the handlers are
+        connected."""
+        self._expand_button.setChecked(expanded)
+        self._visible_check.setChecked(checked)
+
     def add_widget(self, widget: QtWidgets.QWidget) -> None:
         self.content_layout.addWidget(widget)
 

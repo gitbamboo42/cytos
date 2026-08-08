@@ -2,10 +2,17 @@
 cell polygons (`cytos.core.polygons`) and transcript points
 (`cytos.core.points`).
 
-Both caches are written by `cytos.prep` as `tile/<depth>/<row>/<col>` zarr
-groups over the same square grid, so "which tiles does this camera rect touch,
-and which of those actually exist on disk" is one question with one answer --
+Every layer in a bundle shares one `world_bounds` and one `tile_depth` (both
+fixed at import time and recorded in the manifest, see `cytos.core.bundle`), so
+"which tiles does this camera rect touch" is one question with one answer --
 kept here rather than copied into each layer.
+
+Which tiles *exist* is answered from the manifest's tile index, an in-memory
+set, not by probing the tile store. That matters more than it sounds: tissue
+never fills its own bounding square, so most of the grid is empty and the check
+has to happen on every camera move. Probing zarr for it measured ~8 ms per move
+on the 167K-cell bundle -- about half a 60fps frame budget -- against 0.004 ms
+from the index. It also keeps this module free of any storage-format import.
 
 Tiles are indexed with world Y increasing upward, the same convention as
 `cytos.core.image`'s pyramid levels, so no row flip is needed anywhere on this
@@ -15,7 +22,6 @@ path (see CLAUDE.md).
 from __future__ import annotations
 
 import numpy as np
-import zarr
 
 
 def tile_world_size(world_bounds: tuple[float, float, float, float], tile_depth: int) -> float:
@@ -27,19 +33,18 @@ def tile_world_size(world_bounds: tuple[float, float, float, float], tile_depth:
 
 
 def visible_tile_keys(
-    root: zarr.Group,
+    tiles: set[tuple[int, int]],
     tile_depth: int,
     world_bounds: tuple[float, float, float, float],
     world_rect: tuple[float, float, float, float],
 ) -> list[tuple[int, int]]:
-    """(row, col) of every tile the camera rect touches *that exists in the
-    cache*. Tissue rarely fills its own bounding square, so most of the grid
-    is empty and checking is much cheaper than a failed read per tile."""
+    """(row, col) of every tile the camera rect touches *that the layer
+    actually wrote* -- `tiles` is the layer's tile index from the manifest."""
     minx, miny, maxx, maxy = world_rect
     bminx, bminy, bmaxx, bmaxy = world_bounds
     n = 1 << tile_depth
     size = tile_world_size(world_bounds, tile_depth)
-    if size <= 0:
+    if size <= 0 or not tiles:
         return []
 
     col0 = max(0, int((minx - bminx) / size))
@@ -49,14 +54,4 @@ def visible_tile_keys(
     if col0 >= col1 or row0 >= row1:
         return []
 
-    existing = root["tile"][str(tile_depth)]
-    keys = []
-    for row in range(row0, row1):
-        row_key = str(row)
-        if row_key not in existing:
-            continue
-        row_group = existing[row_key]
-        for col in range(col0, col1):
-            if str(col) in row_group:
-                keys.append((row, col))
-    return keys
+    return [(row, col) for row in range(row0, row1) for col in range(col0, col1) if (row, col) in tiles]

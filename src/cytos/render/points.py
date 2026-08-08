@@ -1,4 +1,4 @@
-"""Transcript-point streaming: reads `cytos.prep.points`'s tiled zarr cache
+"""Transcript-point streaming: reads `cytos.prep.points`'s tiled cache
 (Hilbert-sorted) and keeps a GPU-resident LRU cache of just the visible tiles
 as pygfx point clouds -- the same camera -> visible-tiles -> upload-new/
 evict-old loop as `cytos.render.image.TileCache` and
@@ -195,14 +195,12 @@ class PointTileCache:
 
     def _make_tile(self, row: int, col: int) -> gfx.Points:
         tile = self.grid.tile(row, col)
-        coords = np.asarray(tile["coords"])
-        gene_ids = np.asarray(tile["gene_id"])
 
-        positions = np.zeros((len(coords), 3), dtype=np.float32)
-        positions[:, :2] = coords
+        positions = np.zeros((len(tile.coords), 3), dtype=np.float32)
+        positions[:, :2] = tile.coords
         positions[:, 2] = _POINT_Z
 
-        geometry = gfx.Geometry(positions=positions, texcoords=self._lut.uv(gene_ids))
+        geometry = gfx.Geometry(positions=positions, texcoords=self._lut.uv(tile.gene_id))
         material = gfx.PointsMaterial(
             size=self.size,
             size_space="screen",

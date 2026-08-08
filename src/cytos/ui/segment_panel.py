@@ -22,6 +22,7 @@ class SegmentRow(QtWidgets.QGroupBox):
     outline_changed = QtCore.Signal(bool)
     fill_changed = QtCore.Signal(bool)
     fill_opacity_changed = QtCore.Signal(float)
+    visibility_changed = QtCore.Signal(bool)
 
     def __init__(
         self,
@@ -32,9 +33,19 @@ class SegmentRow(QtWidgets.QGroupBox):
         show_outline: bool,
         show_fill: bool,
         fill_opacity: float,
+        visible: bool = True,
     ):
         super().__init__(title)
         layout = QtWidgets.QFormLayout(self)
+
+        # A bundle can hold several segment layers (cell and nucleus
+        # boundaries, say), so each needs its own on/off -- the section
+        # checkbox above is the master for all of them, the way ChannelRow
+        # sits under the Images section.
+        self.visible_check = QtWidgets.QCheckBox("Visible")
+        self.visible_check.setChecked(visible)
+        self.visible_check.toggled.connect(self.visibility_changed)
+        layout.addRow(self.visible_check)
 
         self.cmap_combo = make_colormap_combo(colormap)
         self.cmap_combo.currentTextChanged.connect(self.colormap_changed)
@@ -71,6 +82,36 @@ class SegmentRow(QtWidgets.QGroupBox):
         self.opacity_spin.valueChanged.connect(self.fill_opacity_changed)
         layout.addRow("Fill opacity", self.opacity_spin)
         self._sync_opacity_enabled(show_fill)
+
+    def state(self) -> dict:
+        """What this row currently shows. Mirrors `apply`."""
+        text = self.color_by_combo.currentText()
+        return {
+            "visible": self.visible_check.isChecked(),
+            "colormap": self.cmap_combo.currentText(),
+            "color_by": None if text == FLAT_COLOR_LABEL else text,
+            "show_outline": self.outline_check.isChecked(),
+            "show_fill": self.fill_check.isChecked(),
+            "fill_opacity": self.opacity_spin.value(),
+        }
+
+    def apply(
+        self,
+        colormap: str,
+        color_by: str | None,
+        show_outline: bool,
+        show_fill: bool,
+        fill_opacity: float,
+        visible: bool,
+    ) -> None:
+        """Push a saved (or default) state back into the widgets; each setter
+        re-emits this row's signal, which is how it reaches the tile cache."""
+        self.visible_check.setChecked(visible)
+        self.cmap_combo.setCurrentText(colormap)
+        self.color_by_combo.setCurrentText(color_by if color_by is not None else FLAT_COLOR_LABEL)
+        self.outline_check.setChecked(show_outline)
+        self.fill_check.setChecked(show_fill)
+        self.opacity_spin.setValue(float(fill_opacity))
 
     def _sync_opacity_enabled(self, fill_on: bool) -> None:
         self.opacity_spin.setEnabled(fill_on)

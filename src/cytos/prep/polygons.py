@@ -1,8 +1,8 @@
 """Offline preprocessing for the polygon layer: triangulate every cell once,
-Hilbert-sort so spatially-close cells become memory-close, tile into a flat
-world-space grid, write to a zarr cache. See work-notes/plan.md Phase 2 --
-this is the precomputation that buys the renderer its speed; napari
-triangulates inside add_shapes() instead.
+Hilbert-sort so spatially-close cells become memory-close, tile into the
+bundle's shared world-space grid, write to a zarr cache. See
+work-notes/plan.md Phase 2 -- this is the precomputation that buys the
+renderer its speed; napari triangulates inside add_shapes() instead.
 
 Tiling reuses the Hilbert curve itself rather than a separate quadtree
 structure: a curve of `order` bits per axis visits every order-L quadrant as
@@ -12,17 +12,14 @@ contiguous slice of the sorted arrays (verified in work-notes -- see
 `Polygons`/`load_polygons` in cytos.core.polygons for the loader this
 extends).
 
-Usage (installed as a console script, see pyproject.toml [project.scripts]):
-    cytos-prep-polygons data/xenium_breast_cancer_rep1/cell_boundaries.parquet \
-        --cells data/xenium_breast_cancer_rep1/cells.parquet \
-        --tile-size 500 \
-        --out data/xenium_breast_cancer_rep1/polygons_cache/
+Not a command of its own: `cytos-import` (`cytos.prep.bundle`) drives this,
+because the world bounds and tile depth are the *bundle's*, decided once
+across every layer. Running it standalone would put this layer on a grid that
+no other layer in the bundle shares.
 """
 
 from __future__ import annotations
 
-import argparse
-import shutil
 from pathlib import Path
 
 import mapbox_earcut as earcut
@@ -30,7 +27,7 @@ import numpy as np
 import pyarrow.parquet as pq
 import zarr
 
-from cytos.core.polygons import load_polygons
+from cytos.core.polygons import Polygons
 from cytos.prep.tiling import HILBERT_ORDER as _HILBERT_ORDER, run_bounds, sort_and_tile
 
 
@@ -70,13 +67,20 @@ def _triangulate_per_cell(coords: np.ndarray, offsets: np.ndarray) -> tuple[np.n
 
 
 def prep_polygons(
-    boundaries_path: Path,
+    polygons: Polygons,
     out_dir: Path,
-    cells_path: Path | None = None,
-    tile_size: float = 500.0,
+    world_bounds: tuple[float, float, float, float],
+    tile_depth: int,
     hilbert_order: int = _HILBERT_ORDER,
-) -> None:
-    polygons = load_polygons(boundaries_path, cells_path)
+) -> dict:
+    """Write `out_dir/{tiles.zarr, features.parquet}`. Takes an already-loaded
+    `Polygons` rather than a path so the importer can compute the bundle's
+    shared world bounds from it without parsing the parquet twice.
+
+    Returns the manifest fields for this layer -- notably `tiles`, the index of
+    every (row, col) actually written, which is what the viewer uses to answer
+    "which tiles are visible" without touching the store.
+    """
     n_cells = len(polygons.offsets) - 1
     offsets = polygons.offsets.astype(np.int64)
 
@@ -90,12 +94,7 @@ def prep_polygons(
     np.add.at(vertex_sums, cell_of_vertex, polygons.coords.astype(np.float64))
     centroids = vertex_sums / vcounts[:, None]
 
-    minx, miny = polygons.coords[:, 0].min(), polygons.coords[:, 1].min()
-    maxx, maxy = polygons.coords[:, 0].max(), polygons.coords[:, 1].max()
-    world_bounds = (float(minx), float(miny), float(maxx), float(maxy))
-    perm, tile_row, tile_col, tile_depth = sort_and_tile(
-        centroids, world_bounds, tile_size, hilbert_order
-    )
+    perm, tile_row, tile_col = sort_and_tile(centroids, world_bounds, tile_depth, hilbert_order)
 
     new_coords, new_offsets = _reorder_ragged(polygons.coords, offsets, perm)
     new_tri_local, new_tri_offsets = _reorder_ragged(tri_local_flat, tri_offsets, perm)
@@ -112,18 +111,16 @@ def prep_polygons(
     tile_key = tile_row * (1 << tile_depth) + tile_col
     cell_run_starts, cell_run_ends = run_bounds(tile_key)
 
-    if out_dir.exists():
-        shutil.rmtree(out_dir)
-    out_dir.mkdir(parents=True)
-
+    out_dir.mkdir(parents=True, exist_ok=True)
     root = zarr.open_group(str(out_dir / "tiles.zarr"), mode="w")
+    # Self-describing, so a stray tile store can still be identified -- but the
+    # bundle manifest is what the viewer actually reads.
     root.attrs["hilbert_order"] = hilbert_order
     root.attrs["tile_depth"] = tile_depth
-    root.attrs["world_bounds"] = [float(minx), float(miny), float(maxx), float(maxy)]
+    root.attrs["world_bounds"] = [float(v) for v in world_bounds]
     root.attrs["n_cells"] = n_cells
-    root.attrs["n_vertices"] = int(len(new_coords))
-    root.attrs["n_triangles"] = int(len(global_tri_idx) // 3)
 
+    tiles = []
     for cell_j0, cell_j1 in zip(cell_run_starts, cell_run_ends):
         row, col = int(tile_row[cell_j0]), int(tile_col[cell_j0])
         v0, v1 = int(new_offsets[cell_j0]), int(new_offsets[cell_j1])
@@ -132,26 +129,15 @@ def prep_polygons(
         group.create_array("coords", data=new_coords[v0:v1])
         group.create_array("triangle_indices", data=(global_tri_idx[ti0:ti1] - v0).astype(np.uint32))
         group.create_array("vertex_cell_id", data=vertex_cell_id[v0:v1])
+        tiles.append([row, col])
 
     features = polygons.features.take(perm)
     pq.write_table(features, out_dir / "features.parquet")
 
-    print(
-        f"wrote {out_dir}: {n_cells} cells, {len(new_coords)} vertices, "
-        f"{len(global_tri_idx) // 3} triangles, tile_depth={tile_depth} "
-        f"({len(cell_run_starts)} tiles)"
-    )
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("boundaries", type=Path, help="e.g. cell_boundaries.parquet")
-    parser.add_argument("--cells", type=Path, default=None, help="e.g. cells.parquet, for per-cell features")
-    parser.add_argument("--tile-size", type=float, default=500.0, help="target tile size, world units (um)")
-    parser.add_argument("--out", type=Path, required=True)
-    args = parser.parse_args()
-    prep_polygons(args.boundaries, args.out, cells_path=args.cells, tile_size=args.tile_size)
-
-
-if __name__ == "__main__":
-    main()
+    return {
+        "n_cells": n_cells,
+        "n_vertices": int(len(new_coords)),
+        "n_triangles": int(len(global_tri_idx) // 3),
+        "tile_depth": tile_depth,
+        "tiles": tiles,
+    }

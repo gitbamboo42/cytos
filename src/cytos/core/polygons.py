@@ -19,6 +19,7 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 import zarr
 
+from cytos.core.bundle import TILES_FORMAT, SegmentLayer
 from cytos.core.tiling import tile_world_size, visible_tile_keys
 
 
@@ -73,47 +74,65 @@ def load_polygons(boundaries_path: Path, cells_path: Path | None = None) -> Poly
 
 
 @dataclass
+class PolygonTile:
+    """One tile's geometry, as plain numpy. The renderer only ever sees this,
+    never the store it came out of -- which is what lets the tile format change
+    (`SegmentLayer.format`) without touching `cytos.render`."""
+
+    coords: np.ndarray  # (V, 2) float32, world space
+    triangle_indices: np.ndarray  # (T*3,) uint32, local to this tile's coords
+    vertex_cell_id: np.ndarray  # (V,) uint32, dense cell id -- indexes the color LUT
+
+
+@dataclass
 class PolygonTileGrid:
     """A `cytos.prep.polygons` cache: triangulated, Hilbert-sorted polygon
     tiles at a single flat-grid depth (see that module for why one depth is
     enough -- coarse zoom gets a raster stand-in instead, Phase 2/3). Reading
-    a tile is a cheap zarr array read, not a re-triangulation.
+    a tile is a cheap array read, not a re-triangulation.
 
     `features` is the cache's per-cell attribute table, already permuted into
     dense-cell-id order at prep time (`prep_polygons` writes
     `features.take(perm)`), so row i *is* cell i -- what the renderer's color
-    LUT is indexed by. None when the cache predates it or the parquet is
-    missing.
+    LUT is indexed by.
     """
 
-    root: zarr.Group
+    store: zarr.Group
     tile_depth: int
     world_bounds: tuple[float, float, float, float]  # (minx, miny, maxx, maxy), world space
     n_cells: int
+    tiles: set[tuple[int, int]]  # which tiles exist, from the manifest's index
     features: pa.Table | None = None
 
     def tile_world_size(self) -> float:
         return tile_world_size(self.world_bounds, self.tile_depth)
 
-    def tile(self, row: int, col: int) -> zarr.Group:
-        return self.root[f"tile/{self.tile_depth}/{row}/{col}"]
+    def tile(self, row: int, col: int) -> PolygonTile:
+        group = self.store[f"tile/{self.tile_depth}/{row}/{col}"]
+        return PolygonTile(
+            coords=np.asarray(group["coords"]),
+            triangle_indices=np.asarray(group["triangle_indices"]),
+            vertex_cell_id=np.asarray(group["vertex_cell_id"]),
+        )
 
 
-def load_polygon_tile_grid(cache_dir: Path) -> PolygonTileGrid:
-    cache_dir = Path(cache_dir)
-    root = zarr.open_group(str(cache_dir / "tiles.zarr"), mode="r")
-    attrs = root.attrs
+def load_polygon_tile_grid(layer: SegmentLayer, world_bounds: tuple[float, float, float, float]) -> PolygonTileGrid:
+    """Open the tile store a bundle's segment layer points at. `world_bounds`
+    is the bundle's, not the layer's -- every layer shares one grid."""
+    if layer.format != TILES_FORMAT:
+        raise ValueError(f"{layer.path}: unsupported segment tile format {layer.format!r}")
 
     features = None
-    features_path = cache_dir / "features.parquet"
+    features_path = layer.path / "features.parquet"
     if features_path.exists():
         features = pq.read_table(features_path)
 
     return PolygonTileGrid(
-        root=root,
-        tile_depth=int(attrs["tile_depth"]),
-        world_bounds=tuple(attrs["world_bounds"]),
-        n_cells=int(attrs["n_cells"]),
+        store=zarr.open_group(str(layer.path / "tiles.zarr"), mode="r"),
+        tile_depth=layer.tile_depth,
+        world_bounds=world_bounds,
+        n_cells=layer.n_cells,
+        tiles=layer.tiles,
         features=features,
     )
 
@@ -146,4 +165,4 @@ def visible_polygon_tile_keys(
     same convention as `cytos.core.image.visible_chunk_keys`, but polygon
     coords are already in world space (see `load_polygons`), so unlike that
     function this needs no row/pixel flip."""
-    return visible_tile_keys(grid.root, grid.tile_depth, grid.world_bounds, world_rect)
+    return visible_tile_keys(grid.tiles, grid.tile_depth, grid.world_bounds, world_rect)

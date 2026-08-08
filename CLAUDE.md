@@ -12,8 +12,11 @@ preprocessing, renderer, picking).
 
 Properly installed package (`pyproject.toml`, hatchling; `pip install -e .`
 into the `cytos` conda env), not a folder of scripts — `pip install cytos`
-pulls in real dependencies and registers two console-script commands
-(`cytos-viewer`, `cytos-convert-ome-zarr`, both defined in `cli.py`).
+pulls in real dependencies and registers console-script commands (see
+`cli.py`). Two of them are the product: `cytos-import` builds a `.cytos`
+bundle from a source dataset, `cytos-viewer` opens one. (`cytos-convert-
+ome-zarr` is a standalone OME-TIFF → OME-Zarr utility the importer also
+calls.)
 
 `src/cytos/` splits the way napari splits `layers/`+`components/` (core model)
 from `_vispy/` (rendering backend) from `_qt/` (UI): `core/` (pure data model,
@@ -40,6 +43,26 @@ each folder's own contents for what's there.
 (`load_polygons`, `load_ome_zarr_image`, `polygons_from_parquet`), never after
 the source platform (`load_xenium`) — Xenium is the first data source, not the
 only one.
+
+## The `.cytos` bundle — the viewer's only entry point
+
+`cytos-viewer` takes one bundle directory and nothing else; `cytos-import`
+builds one. A bundle is a plain directory with a plain-JSON manifest
+(`cytos.json`), not one big zarr hierarchy, so nothing at the top level is tied
+to a storage format — zarr stays in the leaves, each named by a per-layer
+`format` field. Three consequences to keep: world space (`world_bounds`,
+`tile_depth`) is decided once at import and shared by every layer, so no layer
+picks its own grid; the manifest carries each layer's tile index, so
+visible-tile lookup is arithmetic on an in-memory set (0.004 ms) rather than
+probing the store (~8 ms per camera move); and `tile()` returns numpy
+dataclasses, so `cytos.render` never sees a storage object. That last one, not
+the directory layout, is what keeps the tile format swappable. See
+`src/cytos/core/bundle.py`.
+
+`cytos.json` is written once by the importer and holds each layer's *defaults*;
+`session.json` (same folder, written on window close) holds only your overrides
+plus camera and window state. Two files, so View > Reset to Bundle Defaults can
+just drop the session and re-read the manifest. See `src/cytos/core/session.py`.
 
 ## Implementation gotchas (verified against a real bundle)
 

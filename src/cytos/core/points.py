@@ -23,6 +23,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import zarr
 
+from cytos.core.bundle import TILES_FORMAT, PointLayer
 from cytos.core.tiling import tile_world_size, visible_tile_keys
 
 # Xenium's own recommended quality cutoff: Phred-scaled, so 20 means a 1-in-100
@@ -93,20 +94,30 @@ def load_transcripts(
 
 
 @dataclass
+class PointTile:
+    """One tile's points, as plain numpy -- the renderer never sees the store
+    they came from (same reasoning as `cytos.core.polygons.PolygonTile`)."""
+
+    coords: np.ndarray  # (P, 2) float32, world space
+    gene_id: np.ndarray  # (P,) uint32, dense index into the layer's gene table
+
+
+@dataclass
 class PointTileGrid:
     """A `cytos.prep.points` cache: Hilbert-sorted transcript points tiled over
     the same flat world grid the polygon cache uses (`cytos.core.tiling`).
-    Reading a tile is a cheap zarr array read.
+    Reading a tile is a cheap array read.
 
     `genes` is the cache's gene table -- row i describes dense gene id i, with
     at least a "name" and a "count" column, so the UI can list genes by
     abundance without touching a single point.
     """
 
-    root: zarr.Group
+    store: zarr.Group
     tile_depth: int
     world_bounds: tuple[float, float, float, float]  # (minx, miny, maxx, maxy), world space
     n_points: int
+    tiles: set[tuple[int, int]]  # which tiles exist, from the manifest's index
     genes: pa.Table | None = None
 
     @property
@@ -118,25 +129,31 @@ class PointTileGrid:
     def tile_world_size(self) -> float:
         return tile_world_size(self.world_bounds, self.tile_depth)
 
-    def tile(self, row: int, col: int) -> zarr.Group:
-        return self.root[f"tile/{self.tile_depth}/{row}/{col}"]
+    def tile(self, row: int, col: int) -> PointTile:
+        group = self.store[f"tile/{self.tile_depth}/{row}/{col}"]
+        return PointTile(
+            coords=np.asarray(group["coords"]),
+            gene_id=np.asarray(group["gene_id"]),
+        )
 
 
-def load_point_tile_grid(cache_dir: Path) -> PointTileGrid:
-    cache_dir = Path(cache_dir)
-    root = zarr.open_group(str(cache_dir / "tiles.zarr"), mode="r")
-    attrs = root.attrs
+def load_point_tile_grid(layer: PointLayer, world_bounds: tuple[float, float, float, float]) -> PointTileGrid:
+    """Open the tile store a bundle's point layer points at. `world_bounds` is
+    the bundle's, not the layer's -- every layer shares one grid."""
+    if layer.format != TILES_FORMAT:
+        raise ValueError(f"{layer.path}: unsupported point tile format {layer.format!r}")
 
     genes = None
-    genes_path = cache_dir / "genes.parquet"
+    genes_path = layer.path / "genes.parquet"
     if genes_path.exists():
         genes = pq.read_table(genes_path)
 
     return PointTileGrid(
-        root=root,
-        tile_depth=int(attrs["tile_depth"]),
-        world_bounds=tuple(attrs["world_bounds"]),
-        n_points=int(attrs["n_points"]),
+        store=zarr.open_group(str(layer.path / "tiles.zarr"), mode="r"),
+        tile_depth=layer.tile_depth,
+        world_bounds=world_bounds,
+        n_points=layer.n_points,
+        tiles=layer.tiles,
         genes=genes,
     )
 
@@ -146,4 +163,4 @@ def visible_point_tile_keys(
 ) -> list[tuple[int, int]]:
     """(tile_row, tile_col) for every cached tile the camera rect touches --
     world_rect = (minx, miny, maxx, maxy), world Y increasing upward."""
-    return visible_tile_keys(grid.root, grid.tile_depth, grid.world_bounds, world_rect)
+    return visible_tile_keys(grid.tiles, grid.tile_depth, grid.world_bounds, world_rect)

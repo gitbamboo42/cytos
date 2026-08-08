@@ -57,6 +57,7 @@ class PointsRow(QtWidgets.QGroupBox):
         colormap: str,
         size: float,
         opacity: float,
+        visible_genes: set[int] | None = None,
     ):
         super().__init__(title)
         self._gene_names = gene_names
@@ -113,7 +114,8 @@ class PointsRow(QtWidgets.QGroupBox):
         for gene_id in order:
             item = QtWidgets.QListWidgetItem(f"{gene_names[gene_id]}  ({gene_counts[gene_id]})")
             item.setFlags(item.flags() | QtCore.Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(QtCore.Qt.CheckState.Checked)
+            checked = visible_genes is None or gene_id in visible_genes
+            item.setCheckState(QtCore.Qt.CheckState.Checked if checked else QtCore.Qt.CheckState.Unchecked)
             item.setData(QtCore.Qt.ItemDataRole.UserRole, gene_id)
             self.gene_list.addItem(item)
         self.gene_list.itemChanged.connect(self._on_item_changed)
@@ -213,6 +215,47 @@ class PointsRow(QtWidgets.QGroupBox):
             if self.gene_list.item(i).checkState() == QtCore.Qt.CheckState.Checked
         }
         return None if len(visible) == self.gene_list.count() else visible
+
+    def state(self) -> dict:
+        """What this row currently shows. Mirrors `apply`. `genes` is None for
+        "all of them", matching `visible_genes_changed`."""
+        genes = self._visible_genes()
+        return {
+            "color_mode": _MODE_LABELS[self.mode_combo.currentText()],
+            "palette": self.palette_combo.currentText(),
+            "colormap": self.cmap_combo.currentText(),
+            "size": self.size_spin.value(),
+            "opacity": self.opacity_spin.value(),
+            "genes": None if genes is None else sorted(genes),
+        }
+
+    def apply(
+        self,
+        color_mode: str,
+        palette: str,
+        colormap: str,
+        size: float,
+        opacity: float,
+        visible_genes: set[int] | None,
+    ) -> None:
+        """Push a saved (or default) state back into the widgets; each setter
+        re-emits this row's signal, which is how it reaches the tile cache."""
+        self.mode_combo.setCurrentText(next(label for label, m in _MODE_LABELS.items() if m == color_mode))
+        self.palette_combo.setCurrentText(palette)
+        self.cmap_combo.setCurrentText(colormap)
+        self.size_spin.setValue(float(size))
+        self.opacity_spin.setValue(float(opacity))
+
+        # One signal for the whole list, as in _set_all: a few hundred
+        # per-item emissions would each rebuild the colour LUT.
+        blocked = self.gene_list.blockSignals(True)
+        for i in range(self.gene_list.count()):
+            item = self.gene_list.item(i)
+            gene_id = item.data(QtCore.Qt.ItemDataRole.UserRole)
+            checked = visible_genes is None or gene_id in visible_genes
+            item.setCheckState(QtCore.Qt.CheckState.Checked if checked else QtCore.Qt.CheckState.Unchecked)
+        self.gene_list.blockSignals(blocked)
+        self._emit_visible()
 
     def _emit_visible(self) -> None:
         visible = self._visible_genes()

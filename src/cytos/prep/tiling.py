@@ -37,18 +37,39 @@ def hilbert_index(order: int, x: np.ndarray, y: np.ndarray) -> np.ndarray:
     return d
 
 
-def sort_and_tile(
-    anchors: np.ndarray,
+def choose_tile_depth(
     world_bounds: tuple[float, float, float, float],
     tile_size: float,
     hilbert_order: int = HILBERT_ORDER,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+) -> int:
+    """Grid depth whose tiles come closest to `tile_size` world units across.
+
+    Split out from `sort_and_tile` so the *bundle* can pick one depth once and
+    hand the same one to every layer -- when each layer chose its own from its
+    own extent, the polygon and point caches ended up on grids that didn't line
+    up (see `cytos.core.bundle`).
+    """
+    minx, miny, maxx, maxy = world_bounds
+    span = max(maxx - minx, maxy - miny)
+    return int(np.clip(round(np.log2(max(span / tile_size, 1.0))), 0, hilbert_order))
+
+
+def sort_and_tile(
+    anchors: np.ndarray,
+    world_bounds: tuple[float, float, float, float],
+    tile_depth: int,
+    hilbert_order: int = HILBERT_ORDER,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """`anchors` is one representative world (x, y) per item -- a cell's
     centroid for polygons, the point itself for transcripts.
 
-    Returns `(perm, tile_row, tile_col, tile_depth)`: `perm` puts the items in
-    Hilbert order, and `tile_row`/`tile_col` are already in that sorted order
-    (i.e. they describe `anchors[perm]`, not `anchors`), so the caller can slice
+    `world_bounds` and `tile_depth` come from the bundle, not from `anchors`:
+    a layer that doesn't span the whole slide still has to land on the shared
+    grid.
+
+    Returns `(perm, tile_row, tile_col)`: `perm` puts the items in Hilbert
+    order, and `tile_row`/`tile_col` are already in that sorted order (i.e.
+    they describe `anchors[perm]`, not `anchors`), so the caller can slice
     tiles straight out of its reordered arrays.
     """
     minx, miny, maxx, maxy = world_bounds
@@ -59,7 +80,6 @@ def sort_and_tile(
 
     perm = np.argsort(hilbert_index(hilbert_order, gx, gy), kind="stable")
 
-    tile_depth = int(np.clip(round(np.log2(max(span / tile_size, 1.0))), 0, hilbert_order))
     if tile_depth:
         shift = hilbert_order - tile_depth
         tile_row = (gy[perm] >> shift).astype(np.int64)
@@ -67,7 +87,7 @@ def sort_and_tile(
     else:
         tile_row = np.zeros(len(perm), np.int64)
         tile_col = np.zeros(len(perm), np.int64)
-    return perm, tile_row, tile_col, tile_depth
+    return perm, tile_row, tile_col
 
 
 def run_bounds(keys: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
