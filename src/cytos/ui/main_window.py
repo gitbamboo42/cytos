@@ -1,10 +1,17 @@
-"""cytos's live viewer. Opens one `.cytos` bundle and nothing else — the
-bundle's manifest says which layers exist, how they're colored, and what world
-space they share (see `cytos.core.bundle`; `cytos-import` builds one).
+"""cytos's live viewer. Opens `.cytos` bundles and nothing else — a bundle's
+manifest says which layers exist, how they're colored, and what world space
+they share (see `cytos.core.bundle`; `cytos-import` builds one).
 
-That single entry point is deliberate. Reassembling a dataset from loose
-paths on the command line meant the viewer had to be told, every time, what
-the data already knew — and left each layer free to sit on its own world grid.
+There is exactly one way in: File > Open Bundle…. The app starts as an empty
+window offering that menu, rather than taking a path on the command line, so a
+bundle can never arrive by a route that skips what that dialog does.
+Reassembling a dataset from loose paths, the way this used to work, meant
+telling the viewer every time what the data already knew — and left each layer
+free to sit on its own world grid.
+
+One process, too: a bundle's session is owned by a single window at a time, and
+that can only be enforced among windows this process can see. Launching again
+brings the running app to the front instead of starting a second one.
 
 Several OME-Zarr pyramids are composited together, each mapped through its own
 colormap (cytos.render.image's TileCache(colormap=...)) and additively blended
@@ -25,7 +32,7 @@ holding one row per layer in the bundle:
   colors — the usual way these are read.
 
 Usage (installed as a console script, see pyproject.toml [project.scripts]):
-    cytos-viewer data/breast_rep1.cytos
+    cytos-viewer
 """
 
 from __future__ import annotations
@@ -36,12 +43,16 @@ from pathlib import Path
 
 import numpy as np
 import pygfx as gfx
-from PySide6 import QtCore, QtGui, QtWidgets
-from rendercanvas.qt import loop
+from PySide6 import QtCore, QtGui, QtNetwork, QtWidgets
+
+# Imported for its side effect: selects the Qt backend for rendercanvas, which
+# `cytos.ui.canvas_input`'s render widget is built on. The loop object itself
+# is unused -- see main() for why this app runs Qt's loop directly.
+import rendercanvas.qt  # noqa: F401
 
 from cytos.core.bundle import load_bundle
 from cytos.core.image import load_pyramid_levels, select_level
-from cytos.core.session import clear_session, load_session, save_session
+from cytos.core.session import load_session, save_session
 from cytos.core.points import load_point_tile_grid
 from cytos.core.polygons import load_polygon_tile_grid, numeric_feature_names
 from cytos.render.camera import effective_camera_view_size
@@ -53,6 +64,7 @@ from cytos.ui.collapsible_section import CollapsibleSection
 from cytos.ui.minimap import MinimapWidget, make_composite_thumbnail
 from cytos.ui.points_panel import PointsRow
 from cytos.ui.segment_panel import SegmentRow
+from cytos.ui.session_picker import choose_session
 from cytos.ui.canvas_input import CanvasRenderWidget
 
 
@@ -82,6 +94,26 @@ def _restore(layer, kind: str, state: dict) -> None:
             setattr(layer, field, state[field])
 
 
+# Every open window lives here. Qt does not own a top-level window on Python's
+# behalf: one with no remaining Python reference is garbage collected and
+# disappears mid-session, which is exactly what happens to a window opened from
+# a menu handler whose locals then go out of scope.
+_OPEN_WINDOWS: list["_MainWindow"] = []
+
+# The welcome window needs holding for the same reason, and it was previously
+# dropped on the floor: its only reference was the return value of the call
+# that made it. A collected window takes its menu bar with it, which on macOS
+# is the *global* menu bar.
+_WELCOME_WINDOW = None
+
+# macOS shows one menu bar for the whole app, sourced from the active window.
+# Minimize every window and there is no active window, so that bar empties out
+# and there's no way to open anything. A QMenuBar with no parent is Qt's
+# answer: it becomes the default menu bar, used whenever no window supplies
+# one. Held module-level because it, too, has no parent to own it.
+_APP_MENU_BAR = None
+
+
 class _MainWindow(QtWidgets.QMainWindow):
     """QMainWindow that runs a callback on close — where the session is
     written. Saving on close rather than on every widget change keeps the file
@@ -90,10 +122,29 @@ class _MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.on_close = None
+        self.bundle_root = None
+        # Every window is bound to exactly one session, and no two windows to
+        # the same one -- see cytos.ui.session_picker.
+        self.session_name = None
+        self.max_tiles = 64
 
     def closeEvent(self, event):  # noqa: N802 - Qt's own naming
         if self.on_close is not None:
             self.on_close()
+        if self in _OPEN_WINDOWS:
+            _OPEN_WINDOWS.remove(self)
+
+        # Closing the last bundle returns to the welcome window rather than
+        # quitting: there's no path on the command line any more, so quitting
+        # would mean relaunching just to look at a different bundle. Closing
+        # the welcome window itself does quit, so "close windows until they're
+        # gone" still ends the app.
+        #
+        # Built here, synchronously, so the visible-window count never reaches
+        # zero -- Qt quits the application the moment it does.
+        if not _OPEN_WINDOWS:
+            build_welcome_window(self.max_tiles)
+
         super().closeEvent(event)
 
 
@@ -108,30 +159,116 @@ def _default_channel_name(path: str) -> str:
     return name
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("bundle", type=Path, help="a .cytos bundle directory — see cytos-import")
-    parser.add_argument("--max-tiles", type=int, default=64, help="GPU tile cache size, per layer")
-    args = parser.parse_args()
+def prompt_open_bundle(parent, max_tiles: int) -> bool:
+    """Ask for a bundle and open each pick in its own window. Returns whether
+    anything opened.
 
-    bundle = load_bundle(args.bundle)
+    The one way into the app: startup calls this with no parent, File > Open
+    Bundle… calls it from a window. Same dialog, same code path, so a bundle
+    can't arrive by a route that skips whatever this does.
+    """
+    dialog = QtWidgets.QFileDialog(parent, "Open .cytos bundle")
+    dialog.setFileMode(QtWidgets.QFileDialog.FileMode.Directory)
+    dialog.setOption(QtWidgets.QFileDialog.Option.ShowDirsOnly, True)
+    dialog.setOption(QtWidgets.QFileDialog.Option.DontUseNativeDialog, True)
+    if not dialog.exec():
+        return False
+
+    opened = False
+    for path in dialog.selectedFiles():
+        try:
+            # None means the session picker was cancelled -- a deliberate
+            # "actually, no", not a failure to report.
+            if build_window(Path(path), max_tiles, parent=parent) is not None:
+                opened = True
+        except (ValueError, KeyError, OSError) as err:
+            QtWidgets.QMessageBox.warning(parent, "Could not open bundle", str(err))
+    return opened
+
+
+def build_welcome_window(max_tiles: int) -> QtWidgets.QMainWindow:
+    """The window the app starts in: no bundle, just the menu that opens one.
+
+    Starting with a file dialog already up puts a modal in front of someone who
+    hasn't asked for anything yet. An empty window with a visible File menu
+    says the same thing without blocking, and it's where napari, Fiji and most
+    viewers start too. It closes itself once a bundle is actually open.
+    """
+    win = QtWidgets.QMainWindow()
+    win.setWindowTitle("cytos")
+    win.resize(760, 480)
+
+    label = QtWidgets.QLabel("No bundle open\n\nFile ▸ Open Bundle…")
+    label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+    label.setStyleSheet("QLabel { background: #141414; color: #9a9a9a; font-size: 15px; }")
+    win.setCentralWidget(label)
+
+    def on_open():
+        if prompt_open_bundle(win, max_tiles):
+            win.close()
+
+    file_menu = win.menuBar().addMenu("File")
+    open_action = file_menu.addAction("Open Bundle…")
+    open_action.setShortcut(QtGui.QKeySequence.StandardKey.Open)
+    open_action.triggered.connect(on_open)
+
+    win.show()
+    global _WELCOME_WINDOW
+    _WELCOME_WINDOW = win
+    return win
+
+
+def build_app_menu_bar(max_tiles: int) -> QtWidgets.QMenuBar:
+    """The parentless menu bar macOS falls back to when no window is active —
+    with every window minimized, this is the only menu on screen."""
+    global _APP_MENU_BAR
+    if _APP_MENU_BAR is not None:
+        return _APP_MENU_BAR
+
+    bar = QtWidgets.QMenuBar()  # deliberately no parent
+    file_menu = bar.addMenu("File")
+    action = file_menu.addAction("Open Bundle…")
+    action.setShortcut(QtGui.QKeySequence.StandardKey.Open)
+    action.triggered.connect(lambda: prompt_open_bundle(None, max_tiles))
+    _APP_MENU_BAR = bar
+    return bar
+
+
+def build_window(bundle_path: Path, max_tiles: int = 64, parent=None) -> _MainWindow | None:
+    """Open one bundle in its own window and return it, already shown. Returns
+    None if the session picker was cancelled.
+
+    Every window is fully independent — own scene, camera, tile caches, dock,
+    and its own session — so opening a second bundle, or a second view of the
+    same bundle, never disturbs the first.
+    """
+    bundle = load_bundle(bundle_path)
     print(
         f"bundle '{bundle.name}': {len(bundle.images)} image(s), "
         f"{len(bundle.segments)} segment layer(s), {len(bundle.points)} point layer(s)"
     )
 
-    # The manifest's values are the defaults; a saved session overrides them.
+    # Which sessions of this bundle are spoken for. One window per session, so
+    # two windows never write the same file -- the picker greys these out.
+    in_use = {
+        w.session_name for w in _OPEN_WINDOWS if w.bundle_root == bundle.root and w.session_name
+    }
+    session_name = choose_session(bundle.root, bundle.name, in_use, parent)
+    if session_name is None:
+        print(f"bundle '{bundle.name}': no session chosen, not opening")
+        return None
+
+    # The manifest's values are the defaults; the session overrides them.
     # Snapshot the defaults *before* overriding, so "reset" has something real
     # to go back to (see cytos.core.session).
-    session = load_session(bundle.root)
+    session = load_session(bundle.root, session_name)
     saved_layers = session.get("layers", {})
     defaults = {}
     for key, kind, layer in _iter_layers(bundle):
         defaults[key] = _capture(layer, kind)
         if key in saved_layers:
             _restore(layer, kind, saved_layers[key])
-    if session:
-        print(f"restored session from {bundle.root}/session.json")
+    print(f"session '{session_name}'" + ("" if session else " (new)"))
 
     scene = gfx.Scene()
     # An empty pygfx scene renders fully *transparent* black (alpha=0), not
@@ -164,7 +301,7 @@ def main() -> None:
             # clim was measured at import and lives in the manifest.
             coarsest = np.asarray(levels[-1].data)
             clim = tuple(float(v) for v in np.percentile(coarsest, [1, 99.5]))
-        cache = TileCache(levels, clim=tuple(clim), max_tiles=args.max_tiles, colormap=colormap)
+        cache = TileCache(levels, clim=tuple(clim), max_tiles=max_tiles, colormap=colormap)
         scene.add(cache.group)
         print(f"channel '{name}': {path} colormap={colormap} clim={tuple(round(float(v), 1) for v in clim)}")
         return Channel(name=name, colormap=colormap, levels=levels, cache=cache)
@@ -186,7 +323,7 @@ def main() -> None:
         color_by = layer.color_by if layer.color_by in feature_names else None
         cache = PolygonTileCache(
             grid,
-            max_tiles=args.max_tiles,
+            max_tiles=max_tiles,
             colormap=layer.colormap,
             color_by=color_by,
             show_outline=layer.show_outline,
@@ -207,7 +344,7 @@ def main() -> None:
         grid = load_point_tile_grid(layer, bundle.world_bounds)
         cache = PointTileCache(
             grid,
-            max_tiles=args.max_tiles,
+            max_tiles=max_tiles,
             size=layer.size,
             color_mode=layer.color_mode,
             colormap=layer.colormap,
@@ -221,9 +358,14 @@ def main() -> None:
             f"{len(grid.tiles)} tiles, color={layer.color_mode}"
         )
 
-    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
     win = _MainWindow()
-    win.setWindowTitle(f"cytos — {bundle.name}")
+    # The session is in the title because it's what tells two windows on the
+    # same bundle apart -- which region you're looking at, not a bare "(2)".
+    win.setWindowTitle(f"cytos — {bundle.name} · {session_name}")
+    win.bundle_root = bundle.root
+    win.session_name = session_name
+    win.max_tiles = max_tiles
     win.resize(1300, 950)
 
     render_widget = CanvasRenderWidget(parent=win)
@@ -478,12 +620,26 @@ def main() -> None:
     )
     win.addDockWidget(QtCore.Qt.DockWidgetArea.RightDockWidgetArea, dock)
 
+    def open_bundle():
+        prompt_open_bundle(win, max_tiles)
+
     file_menu = win.menuBar().addMenu("File")
+    # Always a new window, never a replacement: comparing two samples, or two
+    # regions of one sample, is the reason to open a second bundle at all.
+    open_action = file_menu.addAction("Open Bundle…")
+    open_action.setShortcut(QtGui.QKeySequence.StandardKey.Open)
+    open_action.triggered.connect(open_bundle)
     # "Add", not "Open": the bundle is already open, and this puts another
     # image on top of it rather than replacing anything. The dialog takes
     # several folders at once, so no "(s)" is needed in the label.
     add_action = file_menu.addAction("Add Image…")
     add_action.triggered.connect(add_images)
+    file_menu.addSeparator()
+    # Closing saves anyway; this is for saving a good view *before* carrying on
+    # poking at it, which is the moment you actually want it captured.
+    save_action = file_menu.addAction(f"Save Session “{session_name}”")
+    save_action.setShortcut(QtGui.QKeySequence.StandardKey.Save)
+    save_action.triggered.connect(lambda: (save_now(), print(f"session '{session_name}': saved")))
 
     menu = win.menuBar().addMenu("View")
     menu.addAction(dock.toggleViewAction())
@@ -537,14 +693,28 @@ def main() -> None:
         points_section.apply(False, True)
         fit_camera_to_bundle()
         refresh_minimap()
-        clear_session(bundle.root)
-        print("reset to bundle defaults — session.json removed")
+        # The session file isn't deleted -- you named it, so it stays and is
+        # simply back to holding nothing but the bundle's own defaults, which
+        # is what gets written on the next save.
+        print(f"session '{session_name}': reset to bundle defaults")
 
     menu.addSeparator()
     reset_action = menu.addAction("Reset to Bundle Defaults")
     reset_action.triggered.connect(reset_to_defaults)
 
-    win.on_close = lambda: save_session(bundle.root, collect_session())
+    def snapshot():
+        """The rendered frame, for the picker's thumbnail. Best-effort: a
+        failed readback must never cost you the session itself."""
+        try:
+            return renderer.snapshot()
+        except Exception as err:  # noqa: BLE001 - any GPU readback failure
+            print(f"session '{session_name}': no snapshot ({err})")
+            return None
+
+    def save_now():
+        save_session(bundle.root, session_name, collect_session(), snapshot())
+
+    win.on_close = save_now
 
     saved_window = session.get("window")
     if saved_window:
@@ -604,8 +774,77 @@ def main() -> None:
 
     render_widget.request_draw(animate)
     win.show()
+    _OPEN_WINDOWS.append(win)
     print("window open — left-drag to pan, scroll to zoom, per-layer controls in the dock panel")
-    loop.run()
+    return win
+
+
+# One app, not one per bundle. Sessions are owned by a single window at a time
+# (see cytos.core.session), and that rule can only be enforced against windows
+# this process can see -- a second process would happily open a session the
+# first one already has.
+_IPC_NAME = "cytos-viewer"
+_ipc_server = None  # module-level: a QLocalServer that goes out of scope stops listening
+
+
+def _raise_all_windows() -> None:
+    # Every visible top-level window, not just _OPEN_WINDOWS -- the welcome
+    # window has no bundle behind it and so isn't in that list, but it's
+    # exactly what's on screen when a second launch happens before any bundle
+    # has been opened.
+    for win in QtWidgets.QApplication.topLevelWidgets():
+        if isinstance(win, QtWidgets.QMainWindow) and win.isVisible():
+            win.setWindowState(win.windowState() & ~QtCore.Qt.WindowState.WindowMinimized)
+            win.raise_()
+            win.activateWindow()
+
+
+def _claim_single_instance() -> bool:
+    """True if this process is the app. False means one is already running --
+    it's been asked to come to the front, and this process should exit."""
+    global _ipc_server
+
+    probe = QtNetwork.QLocalSocket()
+    probe.connectToServer(_IPC_NAME)
+    if probe.waitForConnected(300):
+        probe.write(b"raise")
+        probe.waitForBytesWritten(300)
+        probe.disconnectFromServer()
+        return False
+
+    # Nothing answered. Either no instance is running, or one crashed and left
+    # its socket file behind -- removeServer clears a stale one so listen()
+    # can bind. Safe precisely because the probe above just failed.
+    QtNetwork.QLocalServer.removeServer(_IPC_NAME)
+    _ipc_server = QtNetwork.QLocalServer()
+    if not _ipc_server.listen(_IPC_NAME):
+        # Losing the race to bind isn't fatal: it only means the "raise the
+        # running app" handshake won't work, not that this window can't run.
+        print(f"note: could not listen on {_IPC_NAME} ({_ipc_server.errorString()})")
+    _ipc_server.newConnection.connect(lambda: _raise_all_windows())
+    return True
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--max-tiles", type=int, default=64, help="GPU tile cache size, per layer")
+    args = parser.parse_args()
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+    if not _claim_single_instance():
+        print("cytos is already running — bringing it to the front")
+        return
+
+    # Before any window, so the fallback bar exists the first time every
+    # window is minimized rather than only after one has been built.
+    build_app_menu_bar(args.max_tiles)
+    build_welcome_window(args.max_tiles)
+    # Qt's own loop, not rendercanvas's: rendercanvas.run() returns immediately
+    # when no canvas exists yet, and the app now starts on a welcome window
+    # that has none. Equivalent either way -- rendercanvas's Qt backend just
+    # calls app.exec() itself, and its canvases are Qt widgets driven by this
+    # loop regardless of who started it.
+    app.exec()
 
 
 if __name__ == "__main__":
