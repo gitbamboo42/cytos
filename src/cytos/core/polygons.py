@@ -76,12 +76,19 @@ class PolygonTileGrid:
     tiles at a single flat-grid depth (see that module for why one depth is
     enough -- coarse zoom gets a raster stand-in instead, Phase 2/3). Reading
     a tile is a cheap zarr array read, not a re-triangulation.
+
+    `features` is the cache's per-cell attribute table, already permuted into
+    dense-cell-id order at prep time (`prep_polygons` writes
+    `features.take(perm)`), so row i *is* cell i -- what the renderer's color
+    LUT is indexed by. None when the cache predates it or the parquet is
+    missing.
     """
 
     root: zarr.Group
     tile_depth: int
     world_bounds: tuple[float, float, float, float]  # (minx, miny, maxx, maxy), world space
     n_cells: int
+    features: pa.Table | None = None
 
     def tile_world_size(self) -> float:
         minx, miny, maxx, maxy = self.world_bounds
@@ -92,14 +99,43 @@ class PolygonTileGrid:
 
 
 def load_polygon_tile_grid(cache_dir: Path) -> PolygonTileGrid:
-    root = zarr.open_group(str(Path(cache_dir) / "tiles.zarr"), mode="r")
+    cache_dir = Path(cache_dir)
+    root = zarr.open_group(str(cache_dir / "tiles.zarr"), mode="r")
     attrs = root.attrs
+
+    features = None
+    features_path = cache_dir / "features.parquet"
+    if features_path.exists():
+        features = pq.read_table(features_path)
+
     return PolygonTileGrid(
         root=root,
         tile_depth=int(attrs["tile_depth"]),
         world_bounds=tuple(attrs["world_bounds"]),
         n_cells=int(attrs["n_cells"]),
+        features=features,
     )
+
+
+# Numeric, but not a *measurement* of the cell: "id" is an arbitrary label and
+# the centroids just re-encode position, so colouring by them says nothing
+# about the cells themselves. Kept out of the "Color by" picker rather than
+# dropped from the table, which other code still reads.
+_NON_MEASUREMENT_FEATURES = {"id", "cell_id", "x_centroid", "y_centroid"}
+
+
+def numeric_feature_names(features: pa.Table | None) -> list[str]:
+    """Per-cell measurement columns that can drive a colormap, in table order
+    (e.g. cell_area, nucleus_area, transcript_counts, total_counts)."""
+    if features is None:
+        return []
+    names = []
+    for field in features.schema:
+        if field.name in _NON_MEASUREMENT_FEATURES:
+            continue
+        if pa.types.is_integer(field.type) or pa.types.is_floating(field.type):
+            names.append(field.name)
+    return names
 
 
 def visible_polygon_tile_keys(

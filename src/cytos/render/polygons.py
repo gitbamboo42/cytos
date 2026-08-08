@@ -1,41 +1,66 @@
 """Polygon-tile streaming: reads `cytos.prep.polygons`'s tiled zarr cache
 (already triangulated, Hilbert-sorted) and keeps a GPU-resident LRU cache of
-just the visible tiles as pygfx line objects -- the same camera ->
+just the visible tiles as pygfx objects -- the same camera ->
 visible-tiles -> upload-new/evict-old loop as `cytos.render.image.TileCache`
 (built once in Phase 0, reused here per work-notes/plan.md Phase 3).
 
-Draws boundaries only, not filled cells -- the plan's own Phase 2 open
-question ("triangulated outline strips, or fill + screen-space edge
-shader?") settled in favor of the screen-space option, but even simpler:
-`gfx.LineSegmentMaterial(thickness_space="screen")` already renders
-constant-pixel-width edges without a custom shader, so this reads the
-boundary ring straight back out of the cache's `coords` (still in each
-cell's original ring order -- only *cell* order was permuted at prep time,
-not the order of vertices within one cell) instead of `triangle_indices`,
-which is only needed for a filled mesh nothing here draws.
+Each tile draws as two objects that can be shown independently:
+
+* **outline** -- `gfx.LineSegmentMaterial(thickness_space="screen")` gives
+  constant-pixel-width edges with no custom shader, so the boundary ring is
+  read straight back out of the cache's `coords` (still in each cell's
+  original ring order -- only *cell* order was permuted at prep time, not the
+  order of vertices within one cell).
+* **fill** -- a `gfx.Mesh` over the cache's `triangle_indices`, the earcut
+  triangulation `cytos.prep.polygons` already computed offline. Semi-
+  transparent (`fill_opacity`) so the morphology image underneath stays
+  readable; the plan's Phase 2 open question ("triangulated outline strips, or
+  fill + screen-space edge shader?") turns out not to need an either/or --
+  both come off the same cached tile.
 
 Recoloring (Phase 3's "one trick that earns the whole project"): color never
 lives in the vertex buffer. Each vertex carries its cell's dense id as a
 texcoord into a color LUT texture, nearest-filtered so adjacent cells never
 blend into each other at a shared boundary vertex -- the same
 TextureMap(filter="nearest") pattern pygfx's own colormap textures use (see
-`pygfx.utils.cm.registered_colormap`). Recoloring the whole dataset is one
-texture upload, not touching any vertex data.
+`pygfx.utils.cm.registered_colormap`). Outline and fill sample the *same* LUT,
+so recoloring the whole dataset by a per-cell feature is one texture upload,
+not touching any vertex data on either object.
 """
 
 from __future__ import annotations
 
 from collections import OrderedDict
+from dataclasses import dataclass
 
 import numpy as np
 import pygfx as gfx
 
 from cytos.core.polygons import PolygonTileGrid, visible_polygon_tile_keys
+from cytos.render.image import colormap_lut_array
 
 # 2D grid layout for the LUT (rather than a literal 1D texture) so it stays
 # well under GPU texture-dimension limits even at whole-slide cell counts
 # (millions) -- a 1D texture that wide wouldn't be allocatable.
 _LUT_WIDTH = 2048
+
+# Both layers sit just in front of the image tiles (z=0) so neither depends on
+# scene insertion order to land on top, and the outline sits in front of its
+# own fill. World units, and tiny: an orthographic camera's depth range spans
+# the whole scene, so this costs nothing visually.
+_FILL_Z = 0.01
+_OUTLINE_Z = 0.02
+
+# Percentiles, not min/max, for the feature -> color range. Cell measurements
+# are heavy-tailed the same way the fluorescence channels are (cell_area on the
+# breast-cancer bundle: median 140, 98th pct 780, max 1533), and a raw max
+# would push a typical cell down into the bottom tenth of the colormap.
+_FEATURE_PERCENTILES = (2.0, 98.0)
+
+# Not white -- an all-white LUT (what this used to ship) is exactly the color
+# the DAPI/morphology image saturates to, so boundaries disappeared into the
+# bright parts of the image.
+DEFAULT_COLORMAP = "viridis"
 
 
 def _lut_shape(n_cells: int) -> tuple[int, int]:
@@ -43,36 +68,136 @@ def _lut_shape(n_cells: int) -> tuple[int, int]:
     return height, _LUT_WIDTH
 
 
-class PolygonTileCache:
-    """LRU cache of GPU-resident polygon tile boundary lines, sharing one
-    color LUT texture across all of them."""
+def feature_colors(values: np.ndarray, colormap: str) -> np.ndarray:
+    """(n, 4) float32 RGBA: each cell's feature value mapped through `colormap`
+    over its own robust range. Cells with no value (nulls from the left-join in
+    `cytos.core.polygons.load_polygons`) land at the bottom of the ramp rather
+    than dropping out of the LUT entirely."""
+    lut = colormap_lut_array(colormap)  # (256, 4)
+    v = np.asarray(values, dtype=np.float64)
+    finite = np.isfinite(v)
+    if not finite.any():
+        return np.repeat(lut[:1], len(v), axis=0)
 
-    def __init__(self, grid: PolygonTileGrid, max_tiles: int = 64, thickness: float = 1.5):
+    lo, hi = np.percentile(v[finite], _FEATURE_PERCENTILES)
+    if hi <= lo:
+        lo, hi = float(v[finite].min()), float(v[finite].max())
+    if hi <= lo:
+        return np.repeat(lut[-1:], len(v), axis=0)
+
+    norm = np.zeros(len(v), dtype=np.float64)
+    norm[finite] = np.clip((v[finite] - lo) / (hi - lo), 0.0, 1.0)
+    return lut[(norm * 255).astype(np.uint8)]
+
+
+def flat_colors(n: int, colormap: str) -> np.ndarray:
+    """(n, 4) float32 RGBA, every cell the same color -- the top of `colormap`.
+    Reusing the colormap's own high end means "flat color" needs no second
+    color-picker widget: black->cyan gives cyan, viridis gives its yellow."""
+    return np.repeat(colormap_lut_array(colormap)[-1:], n, axis=0)
+
+
+@dataclass
+class _Tile:
+    outline: gfx.Line
+    fill: gfx.Mesh | None
+
+
+class PolygonTileCache:
+    """LRU cache of GPU-resident polygon tiles, each drawn as a screen-space
+    outline and/or a filled mesh, all sharing one per-cell color LUT texture.
+
+    `colormap` picks the ramp; `color_by` picks which column of the cache's
+    per-cell `features` table drives it (None = one flat color for every cell).
+    """
+
+    def __init__(
+        self,
+        grid: PolygonTileGrid,
+        max_tiles: int = 64,
+        thickness: float = 1.5,
+        colormap: str = DEFAULT_COLORMAP,
+        color_by: str | None = None,
+        show_outline: bool = True,
+        show_fill: bool = False,
+        fill_opacity: float = 0.35,
+    ):
         self.grid = grid
         self.max_tiles = max_tiles
         self.thickness = thickness
+        self.colormap = colormap
+        self.color_by = color_by
+        self.show_outline = show_outline
+        self.show_fill = show_fill
+        self.fill_opacity = fill_opacity
+
         self._group = gfx.Group()
-        self._cache: OrderedDict[tuple[int, int], gfx.Line] = OrderedDict()
+        self._cache: OrderedDict[tuple[int, int], _Tile] = OrderedDict()
+        # Tiles the last `update` decided are on screen. A visibility toggle
+        # must not un-hide a cached-but-off-screen tile, and can arrive before
+        # the first update (the panel is built before the first frame draws).
+        self._live: set[tuple[int, int]] = set()
 
         height, width = _lut_shape(grid.n_cells)
         self._lut_array = np.ones((height, width, 4), dtype=np.float32)
         self._lut_texture = gfx.Texture(self._lut_array, dim=2)
         self._lut_map = gfx.TextureMap(self._lut_texture, filter="nearest", wrap="clamp")
+        self._refresh_colors()
 
     @property
     def group(self) -> gfx.Group:
         return self._group
 
+    # -- color -------------------------------------------------------------
+
     def set_colors(self, colors: np.ndarray) -> None:
         """colors: (n_cells, 4) float32 RGBA in [0, 1], indexed by the same
         dense cell id as `cytos.core.polygons.load_polygons`'s `features`
         rows / `cytos.prep.polygons`'s `vertex_cell_id` -- the single
-        recolor-by-cluster operation, independent of how many tiles/vertices
+        recolor-by-feature operation, independent of how many tiles/vertices
         that touches on screen."""
         height, width = self._lut_array.shape[:2]
         flat = self._lut_array.reshape(height * width, 4)
         flat[: len(colors)] = colors
         self._lut_texture.update_full()
+
+    def _refresh_colors(self) -> None:
+        n = self.grid.n_cells
+        features = self.grid.features
+        if self.color_by is not None and features is not None and self.color_by in features.column_names:
+            values = features.column(self.color_by).to_numpy(zero_copy_only=False).astype(np.float64)
+            self.set_colors(feature_colors(values, self.colormap))
+        else:
+            self.set_colors(flat_colors(n, self.colormap))
+
+    def set_colormap(self, colormap: str) -> None:
+        self.colormap = colormap
+        self._refresh_colors()
+
+    def set_color_by(self, color_by: str | None) -> None:
+        self.color_by = color_by
+        self._refresh_colors()
+
+    # -- what's drawn ------------------------------------------------------
+
+    def set_outline_visible(self, visible: bool) -> None:
+        self.show_outline = visible
+        for key, tile in self._cache.items():
+            tile.outline.visible = visible and self._is_live(key)
+
+    def set_fill_visible(self, visible: bool) -> None:
+        self.show_fill = visible
+        for key, tile in self._cache.items():
+            if tile.fill is not None:
+                tile.fill.visible = visible and self._is_live(key)
+
+    def set_fill_opacity(self, opacity: float) -> None:
+        self.fill_opacity = float(opacity)
+        for tile in self._cache.values():
+            if tile.fill is not None:
+                tile.fill.material.opacity = self.fill_opacity
+
+    # -- tiles -------------------------------------------------------------
 
     def _cell_id_to_uv(self, cell_ids: np.ndarray) -> np.ndarray:
         height, width = self._lut_array.shape[:2]
@@ -83,10 +208,7 @@ class PolygonTileCache:
         uv[:, 1] = (row + 0.5) / height
         return uv
 
-    def _make_tile(self, row: int, col: int) -> gfx.Line:
-        tile = self.grid.tile(row, col)
-        coords = np.asarray(tile["coords"])
-        cell_ids = np.asarray(tile["vertex_cell_id"])
+    def _make_outline(self, coords: np.ndarray, cell_ids: np.ndarray) -> gfx.Line:
         v = len(coords)
 
         # "Next vertex within the same cell's ring" for every vertex, wrapping
@@ -109,6 +231,7 @@ class PolygonTileCache:
         positions = np.zeros((2 * v, 3), dtype=np.float32)
         positions[0::2, :2] = coords
         positions[1::2, :2] = coords[next_idx]
+        positions[:, 2] = _OUTLINE_Z
         texcoords = np.repeat(self._cell_id_to_uv(cell_ids), 2, axis=0)
 
         geometry = gfx.Geometry(positions=positions, texcoords=texcoords)
@@ -120,33 +243,83 @@ class PolygonTileCache:
         )
         return gfx.Line(geometry, material)
 
+    def _make_fill(self, coords: np.ndarray, cell_ids: np.ndarray, indices: np.ndarray) -> gfx.Mesh | None:
+        if len(indices) < 3:
+            return None
+        positions = np.zeros((len(coords), 3), dtype=np.float32)
+        positions[:, :2] = coords
+        positions[:, 2] = _FILL_Z
+
+        geometry = gfx.Geometry(
+            positions=positions,
+            indices=indices.reshape(-1, 3).astype(np.uint32),
+            texcoords=self._cell_id_to_uv(cell_ids),
+        )
+        material = gfx.MeshBasicMaterial(map=self._lut_map, color_mode="vertex_map")
+        material.opacity = self.fill_opacity
+        # Explicit over-operator blending rather than the "auto" default: the
+        # image tiles below use a custom *additive* alpha config (see
+        # cytos.render.image), and "blend" composites the fill over whatever
+        # they produced instead of adding to it -- which would wash a bright
+        # region out rather than tint it. depth_write off (the "blend" default)
+        # keeps the fill from occluding its own outline.
+        material.alpha_mode = "blend"
+        return gfx.Mesh(geometry, material)
+
+    def _make_tile(self, row: int, col: int) -> _Tile:
+        tile = self.grid.tile(row, col)
+        coords = np.asarray(tile["coords"])
+        cell_ids = np.asarray(tile["vertex_cell_id"])
+        indices = np.asarray(tile["triangle_indices"])
+
+        # Both objects are built up front, even when one is switched off:
+        # toggling fill/outline then costs nothing, where building lazily
+        # would stall on a zarr read plus an upload for every visible tile at
+        # the moment the checkbox is clicked.
+        return _Tile(
+            outline=self._make_outline(coords, cell_ids),
+            fill=self._make_fill(coords, cell_ids, indices),
+        )
+
+    def _is_live(self, key: tuple[int, int]) -> bool:
+        return key in self._live
+
     def update(self, world_rect: tuple[float, float, float, float]) -> dict:
         needed = set(visible_polygon_tile_keys(self.grid, world_rect))
+        self._live = needed
 
         fetched = 0
         for key in needed:
             if key not in self._cache:
                 row, col = key
-                self._cache[key] = self._make_tile(row, col)
-                self._group.add(self._cache[key])
+                tile = self._make_tile(row, col)
+                self._cache[key] = tile
+                self._group.add(tile.outline)
+                if tile.fill is not None:
+                    self._group.add(tile.fill)
                 fetched += 1
             else:
                 self._cache.move_to_end(key)
 
-        for key, mesh in self._cache.items():
-            mesh.visible = key in needed
+        for key, tile in self._cache.items():
+            live = key in needed
+            tile.outline.visible = live and self.show_outline
+            if tile.fill is not None:
+                tile.fill.visible = live and self.show_fill
 
         evicted = 0
         while len(self._cache) > self.max_tiles:
-            old_key, old_mesh = self._cache.popitem(last=False)
+            old_key, old_tile = self._cache.popitem(last=False)
             if old_key in needed:
                 # shouldn't happen if max_tiles comfortably covers one
                 # screen's worth of tiles, but never evict something we need
                 # this frame -- see cytos.render.image.TileCache.update
-                self._cache[old_key] = old_mesh
+                self._cache[old_key] = old_tile
                 self._cache.move_to_end(old_key)
                 break
-            self._group.remove(old_mesh)
+            self._group.remove(old_tile.outline)
+            if old_tile.fill is not None:
+                self._group.remove(old_tile.fill)
             evicted += 1
 
         return {

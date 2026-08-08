@@ -11,6 +11,10 @@ visibility checkbox, and contrast controls. All channels share one
 camera/level-selection loop, since they're assumed to be spatially registered
 (same pyramid structure).
 
+Segments (cytos.ui.segment_panel) gets outline/fill toggles, a fill-opacity
+control, and a colormap spread over a per-cell measurement — cell_area by
+default, so cells are colored by their own data rather than by a fixed color.
+
 Starts empty by default — pip doesn't ship any data with the package. Load
 channels either via --channel flags or File > Open Channel(s)… once the
 window is up.
@@ -34,14 +38,20 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from rendercanvas.qt import loop
 
 from cytos.core.image import load_pyramid_levels, select_level
-from cytos.core.polygons import load_polygon_tile_grid
+from cytos.core.polygons import load_polygon_tile_grid, numeric_feature_names
 from cytos.render.camera import effective_camera_view_size
 from cytos.render.image import COMPOSITE_COLORMAPS, TileCache
-from cytos.render.polygons import PolygonTileCache
+from cytos.render.polygons import DEFAULT_COLORMAP, PolygonTileCache
 from cytos.ui.channel_panel import Channel, ChannelRow
 from cytos.ui.collapsible_section import CollapsibleSection
 from cytos.ui.minimap import MinimapWidget, make_composite_thumbnail
+from cytos.ui.segment_panel import SegmentRow
 from cytos.ui.canvas_input import CanvasRenderWidget
+
+# Preferred default for the segment layer's "Color by": the most broadly
+# meaningful per-cell measurement present. Falls back to the first numeric
+# feature the cache happens to carry, then to a flat color if it has none.
+_PREFERRED_COLOR_BY = ("cell_area", "nucleus_area", "transcript_counts", "total_counts")
 
 
 def _default_channel_name(path: str) -> str:
@@ -75,6 +85,28 @@ def main() -> None:
         help="path to a cytos-prep-polygons cache directory (e.g. "
         "data/xenium_breast_cancer_rep1/polygons_cache) — draws the cell "
         "boundary layer over the image channels",
+    )
+    parser.add_argument(
+        "--segment-colormap",
+        default=DEFAULT_COLORMAP,
+        help="colormap for the segment layer (same names as --channel); "
+        f"default {DEFAULT_COLORMAP}",
+    )
+    parser.add_argument(
+        "--segment-fill",
+        action="store_true",
+        help="also fill the cells, not just their outlines",
+    )
+    parser.add_argument(
+        "--segment-fill-only",
+        action="store_true",
+        help="fill the cells and hide the outlines",
+    )
+    parser.add_argument(
+        "--segment-fill-opacity",
+        type=float,
+        default=0.35,
+        help="0-1, default 0.35 — kept low so the image underneath stays readable",
     )
     args = parser.parse_args()
 
@@ -117,10 +149,28 @@ def main() -> None:
         channels.append(ch)
 
     polygon_cache = None
+    polygon_features: list[str] = []
     if args.polygons is not None:
         polygon_grid = load_polygon_tile_grid(Path(args.polygons))
-        polygon_cache = PolygonTileCache(polygon_grid, max_tiles=args.max_tiles)
+        polygon_features = numeric_feature_names(polygon_grid.features)
+        color_by = next(
+            (name for name in _PREFERRED_COLOR_BY if name in polygon_features),
+            polygon_features[0] if polygon_features else None,
+        )
+        polygon_cache = PolygonTileCache(
+            polygon_grid,
+            max_tiles=args.max_tiles,
+            colormap=args.segment_colormap,
+            color_by=color_by,
+            show_outline=not args.segment_fill_only,
+            show_fill=args.segment_fill or args.segment_fill_only,
+            fill_opacity=args.segment_fill_opacity,
+        )
         scene.add(polygon_cache.group)
+        print(
+            f"segments: {polygon_grid.n_cells} cells, colormap={args.segment_colormap} "
+            f"color_by={color_by or 'flat'}"
+        )
         px0, py0, px1, py1 = polygon_grid.world_bounds
         minx, miny = min(minx, px0), min(miny, py0)
         maxx, maxy = max(maxx, px1), max(maxy, py1)
@@ -178,12 +228,27 @@ def main() -> None:
     points_section.setEnabled(False)
     dock_layout.addWidget(points_section)
 
-    # Segments currently holds exactly one layer (cell boundaries), so its
-    # own section checkbox *is* that layer's visibility control -- no
-    # separate per-layer row needed until there's more than one segment
-    # layer to distinguish between.
+    # Segments currently holds exactly one layer (cell boundaries), so the
+    # section checkbox is that layer's master on/off; the row under it says
+    # *how* it's drawn (outline/fill/opacity) and *what colors it* (colormap
+    # over a per-cell feature).
     if polygon_cache is not None:
         segments_section.visibility_changed.connect(lambda v: setattr(polygon_cache.group, "visible", v))
+        segment_row = SegmentRow(
+            "Cells",
+            polygon_features,
+            polygon_cache.colormap,
+            polygon_cache.color_by,
+            polygon_cache.show_outline,
+            polygon_cache.show_fill,
+            polygon_cache.fill_opacity,
+        )
+        segment_row.colormap_changed.connect(polygon_cache.set_colormap)
+        segment_row.color_by_changed.connect(polygon_cache.set_color_by)
+        segment_row.outline_changed.connect(polygon_cache.set_outline_visible)
+        segment_row.fill_changed.connect(polygon_cache.set_fill_visible)
+        segment_row.fill_opacity_changed.connect(polygon_cache.set_fill_opacity)
+        segments_section.add_widget(segment_row)
     else:
         segments_section.setEnabled(False)
 
