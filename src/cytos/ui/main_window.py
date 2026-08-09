@@ -62,6 +62,7 @@ from cytos.render.polygons import PolygonTileCache
 from cytos.ui.channel_panel import Channel, ChannelRow
 from cytos.ui.collapsible_section import CollapsibleSection
 from cytos.ui.minimap import MinimapWidget, make_composite_thumbnail
+from cytos.ui.scale_bar import ScaleBarWidget, unit_abbrev
 from cytos.ui.points_panel import PointsRow
 from cytos.ui.segment_panel import SegmentRow
 from cytos.ui.session_picker import choose_session
@@ -384,6 +385,10 @@ def build_window(slide_path: Path, max_tiles: int = 64, parent=None) -> _MainWin
 
     render_widget = CanvasRenderWidget(parent=win)
     win.setCentralWidget(render_widget)
+    # A child of the canvas, so it follows the canvas's own geometry rather than
+    # needing the window layout to leave a hole for it.
+    scale_bar = ScaleBarWidget(render_widget)
+    units_label = unit_abbrev(slide.world_units)
     renderer = gfx.WgpuRenderer(render_widget)
     camera = gfx.OrthographicCamera()
 
@@ -577,7 +582,8 @@ def build_window(slide_path: Path, max_tiles: int = 64, parent=None) -> _MainWin
     stats_label.setWordWrap(False)
     stats_label.setFont(QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.SystemFont.FixedFont))
     stats_label.setFixedWidth(240)
-    stats_label.setMinimumHeight(20 * (len(channels) + len(segment_layers) + len(point_layers)) + 20)
+    # One row per layer, plus the resolution line, plus a row of slack.
+    stats_label.setMinimumHeight(20 * (len(channels) + len(segment_layers) + len(point_layers) + 1) + 20)
     stats_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignLeft)
     dock_layout.addWidget(stats_label)
     dock_layout.addStretch()
@@ -758,6 +764,7 @@ def build_window(slide_path: Path, max_tiles: int = 64, parent=None) -> _MainWin
     last_level = [None]
     latest_stats_text = ["—"]
     latest_world_rect = [(minx, miny, maxx, maxy)]
+    latest_world_per_px = [None]
 
     def animate():
         logical_w, logical_h = render_widget.get_logical_size()
@@ -767,8 +774,11 @@ def build_window(slide_path: Path, max_tiles: int = 64, parent=None) -> _MainWin
         world_rect = (cx - half_w, cy - half_h, cx + half_w, cy + half_h)
         world_per_px = eff_w / logical_w if logical_w else eff_w
         latest_world_rect[0] = world_rect
+        latest_world_per_px[0] = world_per_px
 
-        lines = []
+        # The resolution leads the readout: it is the one number that answers
+        # "what am I actually looking at now", where the rest are cache health.
+        lines = [f"{world_per_px:.3g} {units_label}/px"]
         for ch in channels:
             level_idx = select_level(ch.levels, world_per_px)
             stats = ch.cache.update(level_idx, world_rect)
@@ -787,7 +797,7 @@ def build_window(slide_path: Path, max_tiles: int = 64, parent=None) -> _MainWin
             stats = cache.update(world_rect)
             lines.append(f"{layer.id[:12]:12s} n={stats['needed']} c={stats['cache_size']}")
 
-        latest_stats_text[0] = "\n".join(lines) if lines else "—"
+        latest_stats_text[0] = "\n".join(lines)
 
         renderer.render(scene, camera)
         render_widget.request_draw()
@@ -799,6 +809,7 @@ def build_window(slide_path: Path, max_tiles: int = 64, parent=None) -> _MainWin
     def tick():
         stats_label.setText(latest_stats_text[0])
         minimap.set_view_rect(latest_world_rect[0])
+        scale_bar.set_scale(latest_world_per_px[0], slide.world_units)
 
     # Parented to the window, so the window owns it. Without a parent nothing
     # holds this timer once build_window returns, Python collects it on the way
