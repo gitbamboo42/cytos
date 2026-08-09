@@ -1,5 +1,5 @@
 """Offline preprocessing for the transcript-point layer: Hilbert-sort so
-spatially-close transcripts become memory-close, tile into the bundle's shared
+spatially-close transcripts become memory-close, tile into the slide's shared
 world-space grid -- the same one the polygon layer uses -- and write a zarr
 cache.
 
@@ -12,8 +12,8 @@ The per-tile `gene_id` array is a dense index into `genes.parquet`, not a
 repeated gene *name* string: names cost far more to store and can't index a
 colour LUT on the GPU.
 
-Not a command of its own: `cytos-import` (`cytos.prep.bundle`) drives this, so
-that the world bounds and tile depth are the bundle's rather than this layer's.
+Not a command of its own: `cytos-import` (`cytos.prep.slide`) drives this, so
+that the world bounds and tile depth are the slide's rather than this layer's.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ def prep_points(
 ) -> dict:
     """Write `out_dir/{tiles.zarr, genes.parquet}`. Takes an already-loaded
     `Transcripts` for the same reason `prep_polygons` takes `Polygons`: the
-    importer needs this layer's extent to compute the bundle's shared world
+    importer needs this layer's extent to compute the slide's shared world
     bounds, and parsing tens of millions of rows twice is not free.
 
     Returns this layer's manifest fields, including the `tiles` index.

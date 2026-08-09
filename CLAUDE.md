@@ -14,7 +14,7 @@ Properly installed package (`pyproject.toml`, hatchling; `pip install -e .`
 into the `cytos` conda env), not a folder of scripts — `pip install cytos`
 pulls in real dependencies and registers console-script commands (see
 `cli.py`). Two of them are the product: `cytos-import` builds a `.cytos`
-bundle from a source dataset, `cytos-viewer` opens one. (`cytos-convert-
+slide from a source dataset, `cytos-viewer` opens one. (`cytos-convert-
 ome-zarr` is a standalone OME-TIFF → OME-Zarr utility the importer also
 calls.)
 
@@ -44,10 +44,10 @@ each folder's own contents for what's there.
 the source platform (`load_xenium`) — Xenium is the first data source, not the
 only one.
 
-## The `.cytos` bundle — the viewer's only entry point
+## The `.cytos` slide — the viewer's only entry point
 
-`cytos-viewer` takes one bundle directory and nothing else; `cytos-import`
-builds one. A bundle is a plain directory with a plain-JSON manifest
+`cytos-viewer` takes one slide directory and nothing else; `cytos-import`
+builds one. A slide is a plain directory with a plain-JSON manifest
 (`cytos.json`), not one big zarr hierarchy, so nothing at the top level is tied
 to a storage format — zarr stays in the leaves, each named by a per-layer
 `format` field. Three consequences to keep: world space (`world_bounds`,
@@ -57,14 +57,14 @@ visible-tile lookup is arithmetic on an in-memory set (0.004 ms) rather than
 probing the store (~8 ms per camera move); and `tile()` returns numpy
 dataclasses, so `cytos.render` never sees a storage object. That last one, not
 the directory layout, is what keeps the tile format swappable. See
-`src/cytos/core/bundle.py`.
+`src/cytos/core/slide.py`.
 
 `cytos.json` is written once by the importer and holds each layer's *defaults*;
 `session.json` (same folder, written on window close) holds only your overrides
-plus camera and window state. Two files, so View > Reset to Bundle Defaults can
+plus camera and window state. Two files, so View > Reset to Slide Defaults can
 just drop the session and re-read the manifest. See `src/cytos/core/session.py`.
 
-## Implementation gotchas (verified against a real bundle)
+## Implementation gotchas (verified against a real slide)
 
 Input-data format facts (parquet layout, Xenium zarr schema, OME-TIFF vs.
 zarr) live in `data/README.md`, not here — these are code-level pitfalls hit
@@ -101,8 +101,8 @@ while building the tool, not facts about the input data itself.
   composite channels to a matplotlib sequential colormap without checking its
   0-end color first.
 - **Xenium `morphology_focus.ome.tif` doesn't always have a channel axis.**
-  Protein-panel bundles (e.g. `human_kidney_tiny/`) ship multi-channel
-  (`axes="CYX"`), but gene-only-panel bundles (e.g.
+  Protein-panel datasets (e.g. `human_kidney_tiny/`) ship multi-channel
+  (`axes="CYX"`), but gene-only-panel datasets (e.g.
   `xenium_breast_cancer_rep1/`) collapse to a single DAPI plane with
   `axes="YX"` — no channel dimension at all. `series.asarray()[channel]`
   silently mis-indexes that 2D array (grabs one *row*, not a channel plane)

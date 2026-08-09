@@ -1,4 +1,4 @@
-"""The dialog shown every time a bundle is opened: which saved view do you
+"""The dialog shown every time a slide is opened: which saved view do you
 want to come back to, or start a new one.
 
 A window is always bound to exactly one session (see `cytos.core.session`), so
@@ -36,13 +36,13 @@ _THUMB_PADDING = QtGui.QColor(38, 38, 38)
 class SessionPicker(QtWidgets.QDialog):
     """Returns the chosen session name via `chosen_name`, or None if cancelled."""
 
-    def __init__(self, bundle_root: Path, bundle_name: str, in_use: set[str], parent=None):
+    def __init__(self, slide_root: Path, slide_name: str, in_use: set[str], parent=None):
         super().__init__(parent)
-        self.bundle_root = Path(bundle_root)
+        self.slide_root = Path(slide_root)
         self.in_use = {name.lower() for name in in_use}
         self.chosen_name: str | None = None
 
-        self.setWindowTitle(f"Open session — {bundle_name}")
+        self.setWindowTitle(f"Open session — {slide_name}")
         self.resize(520, 460)
         layout = QtWidgets.QVBoxLayout(self)
 
@@ -77,7 +77,7 @@ class SessionPicker(QtWidgets.QDialog):
 
     def _reload(self) -> None:
         self.list.clear()
-        for info in list_sessions(self.bundle_root):
+        for info in list_sessions(self.slide_root):
             self.list.addItem(self._make_item(info))
         if self.list.count():
             # Most recent first (list_sessions sorts that way), so the top row
@@ -155,7 +155,7 @@ class SessionPicker(QtWidgets.QDialog):
     # -- actions ------------------------------------------------------------
 
     def _new_session(self) -> None:
-        suggested = unique_session_name(self.bundle_root)
+        suggested = unique_session_name(self.slide_root)
         name, ok = QtWidgets.QInputDialog.getText(
             self, "New session", "Name:", QtWidgets.QLineEdit.EchoMode.Normal, suggested
         )
@@ -164,15 +164,15 @@ class SessionPicker(QtWidgets.QDialog):
         name = name.strip()
         if not name:
             return
-        if name.lower() in {s.name.lower() for s in list_sessions(self.bundle_root)}:
+        if name.lower() in {s.name.lower() for s in list_sessions(self.slide_root)}:
             QtWidgets.QMessageBox.warning(self, "Name taken", f"A session called {name!r} already exists.")
             return
-        # Written to disk now, holding nothing but the bundle's own defaults,
+        # Written to disk now, holding nothing but the slide's own defaults,
         # and the dialog stays open. Setting up three or four named sessions
         # before looking at any of them is a normal way to start, and that only
         # works if creating one is complete in itself rather than a side effect
         # of opening a window.
-        save_session(self.bundle_root, name, {})
+        save_session(self.slide_root, name, {})
         self._reload()
         self._select(name)
 
@@ -183,11 +183,11 @@ class SessionPicker(QtWidgets.QDialog):
         confirm = QtWidgets.QMessageBox.question(
             self,
             "Delete session",
-            f"Delete the session {name!r}? The bundle's data and defaults are untouched.",
+            f"Delete the session {name!r}? The slide's data and defaults are untouched.",
         )
         if confirm != QtWidgets.QMessageBox.StandardButton.Yes:
             return
-        delete_session(self.bundle_root, name)
+        delete_session(self.slide_root, name)
         self._reload()
 
     def _accept_selected(self) -> None:
@@ -198,19 +198,19 @@ class SessionPicker(QtWidgets.QDialog):
         self.accept()
 
 
-def choose_session(bundle_root: Path, bundle_name: str, in_use: set[str], parent=None) -> str | None:
-    """Pick a session for a bundle about to be opened, or None to not open it.
+def choose_session(slide_root: Path, slide_name: str, in_use: set[str], parent=None) -> str | None:
+    """Pick a session for a slide about to be opened, or None to not open it.
 
     With no saved sessions there is nothing to choose between, so this skips
     the dialog and returns the default name -- a window still ends up bound to
     a session, which is the rule; it just doesn't ask a question with one
     possible answer.
     """
-    sessions = list_sessions(bundle_root)
+    sessions = list_sessions(slide_root)
     if not sessions:
-        return unique_session_name(bundle_root, "default")
+        return unique_session_name(slide_root, "default")
 
-    dialog = SessionPicker(bundle_root, bundle_name, in_use, parent)
+    dialog = SessionPicker(slide_root, slide_name, in_use, parent)
     if not dialog.exec():
         return None
     return dialog.chosen_name

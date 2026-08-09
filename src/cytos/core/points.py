@@ -23,13 +23,13 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import zarr
 
-from cytos.core.bundle import TILES_FORMAT, PointLayer
+from cytos.core.slide import TILES_FORMAT, PointLayer
 from cytos.core.tiling import tile_world_size, visible_tile_keys
 
 # Xenium's own recommended quality cutoff: Phred-scaled, so 20 means a 1-in-100
 # chance the transcript was miscalled. 10x's analysis pipeline and Xenium
 # Explorer both filter here by default, and the discarded tail is not small
-# (kidney bundle: 5,464 of 26,463 rows), so keeping it would show noise the
+# (kidney slide: 5,464 of 26,463 rows), so keeping it would show noise the
 # platform's own tools never display.
 DEFAULT_MIN_QV = 20.0
 
@@ -50,7 +50,7 @@ def load_transcripts(
 
     `min_qv` drops low-confidence calls; `genes_only` drops the control
     codewords (negative-control probes, unassigned codewords) that share the
-    file with real gene calls. Both columns are optional -- older bundle
+    file with real gene calls. Both columns are optional -- older slide
     versions don't ship `is_gene`/`qv`, and a missing column just means that
     filter doesn't apply rather than an error.
 
@@ -138,8 +138,8 @@ class PointTileGrid:
 
 
 def load_point_tile_grid(layer: PointLayer, world_bounds: tuple[float, float, float, float]) -> PointTileGrid:
-    """Open the tile store a bundle's point layer points at. `world_bounds` is
-    the bundle's, not the layer's -- every layer shares one grid."""
+    """Open the tile store a slide's point layer points at. `world_bounds` is
+    the slide's, not the layer's -- every layer shares one grid."""
     if layer.format != TILES_FORMAT:
         raise ValueError(f"{layer.path}: unsupported point tile format {layer.format!r}")
 

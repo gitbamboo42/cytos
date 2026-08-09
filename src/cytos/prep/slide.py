@@ -1,6 +1,6 @@
-"""`cytos-import`: turn a source dataset into a `.cytos` bundle -- one
+"""`cytos-import`: turn a source dataset into a `.cytos` slide -- one
 directory holding every layer plus the manifest that describes them (see
-`cytos.core.bundle` for the layout and why it is a plain directory rather than
+`cytos.core.slide` for the layout and why it is a plain directory rather than
 one big zarr).
 
 This is the only thing that runs the per-layer prep steps, and that is the
@@ -28,7 +28,7 @@ from pathlib import Path
 
 import numpy as np
 
-from cytos.core.bundle import (
+from cytos.core.slide import (
     CYTOS_FORMAT,
     DEFAULT_CHANNEL_COLORMAPS,
     IMAGE_FORMAT,
@@ -129,7 +129,7 @@ def _coords_bounds(coords: np.ndarray) -> tuple[float, float, float, float]:
     )
 
 
-def import_bundle(
+def import_slide(
     source: Path,
     out: Path,
     name: str | None = None,
@@ -188,7 +188,7 @@ def import_bundle(
         f"tile_depth {tile_depth} ({(max(world_bounds[2] - world_bounds[0], world_bounds[3] - world_bounds[1]) / (1 << tile_depth)):.1f} um/tile)"
     )
 
-    # -- pass 2: write the bundle
+    # -- pass 2: write the slide
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
@@ -199,7 +199,7 @@ def import_bundle(
         dest = out / "images" / f"{img.id}.zarr"
         dest.parent.mkdir(parents=True, exist_ok=True)
         if img.id in image_levels:
-            # Real copy, not a link: a bundle has to survive being moved to
+            # Real copy, not a link: a slide has to survive being moved to
             # another machine on its own.
             shutil.copytree(img.path, dest)
         else:
@@ -288,7 +288,7 @@ def import_bundle(
             "world_units": "micrometer",
             "world_bounds": [float(v) for v in world_bounds],
             "tile_depth": tile_depth,
-            # Provenance: enough to know what a bundle came from and what
+            # Provenance: enough to know what a slide came from and what
             # filters were applied, without going back to the source.
             "source": {
                 "platform": "xenium",
@@ -308,8 +308,8 @@ def import_bundle(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path, help="a Xenium output directory")
-    parser.add_argument("--out", type=Path, required=True, help="bundle directory to create, e.g. sample.cytos")
-    parser.add_argument("--name", default=None, help="display name; defaults to the bundle's own filename")
+    parser.add_argument("--out", type=Path, required=True, help="slide directory to create, e.g. sample.cytos")
+    parser.add_argument("--name", default=None, help="display name; defaults to the slide's own filename")
     parser.add_argument(
         "--tile-size",
         type=float,
@@ -336,7 +336,7 @@ def main() -> None:
         help="repeatable; use these images instead of whatever the source offers",
     )
     args = parser.parse_args()
-    import_bundle(
+    import_slide(
         args.source,
         args.out,
         name=args.name,

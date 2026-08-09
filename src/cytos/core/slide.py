@@ -1,11 +1,11 @@
-"""The `.cytos` bundle: one directory holding every layer of one dataset, plus
-a plain-JSON manifest that says what's in it. `cytos-viewer` opens a bundle and
-nothing else; `cytos-import` (see `cytos.prep.bundle`) is what builds one.
+"""The `.cytos` slide: one directory holding every layer of one dataset, plus
+a plain-JSON manifest that says what's in it. `cytos-viewer` opens a slide and
+nothing else; `cytos-import` (see `cytos.prep.slide`) is what builds one.
 
 Why a directory with a JSON manifest, rather than one big zarr hierarchy:
 nothing at the top level is then tied to any storage format. The root is an
 ordinary directory, the manifest is ordinary JSON, and zarr is confined to the
-leaves -- so a layer can change its on-disk format later without the bundle
+leaves -- so a layer can change its on-disk format later without the slide
 itself having to change. That's what the per-layer `format` field is for.
 
 The manifest also carries the **tile index** (`tiles`: the (row, col) of every
@@ -27,7 +27,7 @@ Layout::
         genes.parquet
 
 World space is decided once, at import, and written here: every layer in a
-bundle shares one `world_bounds` and one `tile_depth`, so all the vector layers
+slide shares one `world_bounds` and one `tile_depth`, so all the vector layers
 sit on the same tile grid. Prep used to derive those per layer from that
 layer's own data, which quietly gave the polygon and point caches two different
 grids.
@@ -39,13 +39,13 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# Bumped only for a change old viewers can't read. A viewer refuses a bundle
+# Bumped only for a change old viewers can't read. A viewer refuses a slide
 # whose format is newer than it knows, rather than guessing at missing fields
 # the way the old free-standing caches had to.
 CYTOS_FORMAT = 1
 
 MANIFEST_NAME = "cytos.json"
-BUNDLE_SUFFIX = ".cytos"
+SLIDE_SUFFIX = ".cytos"
 
 # The zarr-backed tile layout `cytos.prep` writes today. Named in every vector
 # layer so a future packed/mmap layout can land one layer at a time.
@@ -60,7 +60,7 @@ DEFAULT_CHANNEL_COLORMAPS = ("blue", "green", "red", "cyan", "magenta", "yellow"
 
 @dataclass
 class ImageLayer:
-    """One single-channel OME-Zarr pyramid. A bundle lists one of these per
+    """One single-channel OME-Zarr pyramid. A slide lists one of these per
     channel; they are assumed spatially registered, and get composited
     additively the way a multi-channel fluorescence view always is."""
 
@@ -109,7 +109,7 @@ class PointLayer:
 
 
 @dataclass
-class Bundle:
+class Slide:
     root: Path
     name: str
     world_units: str
@@ -127,23 +127,23 @@ def _tiles_to_set(raw) -> set[tuple[int, int]]:
     return {(int(r), int(c)) for r, c in raw}
 
 
-def load_bundle(path: Path | str) -> Bundle:
+def load_slide(path: Path | str) -> Slide:
     """Read `<path>/cytos.json` and resolve every layer path against the
-    bundle root, so a bundle can be moved or renamed without rewriting it."""
+    slide root, so a slide can be moved or renamed without rewriting it."""
     root = Path(path)
     manifest_path = root / MANIFEST_NAME
     if not manifest_path.exists():
-        raise ValueError(f"{root} is not a cytos bundle -- no {MANIFEST_NAME} in it")
+        raise ValueError(f"{root} is not a cytos slide -- no {MANIFEST_NAME} in it")
 
     manifest = json.loads(manifest_path.read_text())
     version = int(manifest.get("cytos_format", 0))
     if version > CYTOS_FORMAT:
         raise ValueError(
-            f"{manifest_path}: bundle format {version} is newer than this cytos "
+            f"{manifest_path}: slide format {version} is newer than this cytos "
             f"understands ({CYTOS_FORMAT}) -- upgrade cytos to open it"
         )
 
-    bundle = Bundle(
+    slide = Slide(
         root=root,
         name=manifest.get("name", root.stem),
         world_units=manifest.get("world_units", "micrometer"),
@@ -156,7 +156,7 @@ def load_bundle(path: Path | str) -> Bundle:
         layer_path = root / layer["path"]
         if kind == "image":
             clim = layer.get("clim")
-            bundle.images.append(
+            slide.images.append(
                 ImageLayer(
                     id=layer["id"],
                     path=layer_path,
@@ -167,11 +167,11 @@ def load_bundle(path: Path | str) -> Bundle:
                 )
             )
         elif kind == "segments":
-            bundle.segments.append(
+            slide.segments.append(
                 SegmentLayer(
                     id=layer["id"],
                     path=layer_path,
-                    tile_depth=int(layer.get("tile_depth", bundle.tile_depth)),
+                    tile_depth=int(layer.get("tile_depth", slide.tile_depth)),
                     tiles=_tiles_to_set(layer.get("tiles", [])),
                     n_cells=int(layer.get("n_cells", 0)),
                     format=layer.get("format", TILES_FORMAT),
@@ -184,11 +184,11 @@ def load_bundle(path: Path | str) -> Bundle:
                 )
             )
         elif kind == "points":
-            bundle.points.append(
+            slide.points.append(
                 PointLayer(
                     id=layer["id"],
                     path=layer_path,
-                    tile_depth=int(layer.get("tile_depth", bundle.tile_depth)),
+                    tile_depth=int(layer.get("tile_depth", slide.tile_depth)),
                     tiles=_tiles_to_set(layer.get("tiles", [])),
                     n_points=int(layer.get("n_points", 0)),
                     format=layer.get("format", TILES_FORMAT),
@@ -205,17 +205,17 @@ def load_bundle(path: Path | str) -> Bundle:
             # this build doesn't know is skipped, not fatal.
             print(f"{manifest_path}: skipping unknown layer kind {kind!r} ({layer.get('id')})")
 
-    _check_layer_paths(bundle, manifest_path)
-    return bundle
+    _check_layer_paths(slide, manifest_path)
+    return slide
 
 
-def _check_layer_paths(bundle: Bundle, manifest_path: Path) -> None:
+def _check_layer_paths(slide: Slide, manifest_path: Path) -> None:
     """The one cost of a manifest separate from the data: it can name a layer
     that isn't on disk. Cheaper to say so at open than to fail later mid-render.
     """
     missing = [
         layer.id
-        for layer in (*bundle.images, *bundle.segments, *bundle.points)
+        for layer in (*slide.images, *slide.segments, *slide.points)
         if not layer.path.exists()
     ]
     if missing:

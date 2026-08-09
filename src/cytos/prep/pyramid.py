@@ -3,7 +3,7 @@ multiscale pyramid.
 
 Xenium's `morphology_focus/*.ome.tif` files are OME-TIFF, not zarr — none of the
 Xenium output is actually OME-NGFF (see CLAUDE.md). This produces a real one, and
-it's what `cytos-import` calls to fill a bundle's `images/` when the source has
+it's what `cytos-import` calls to fill a slide's `images/` when the source has
 no OME-Zarr of its own yet.
 
 Usage (installed as a console script, see pyproject.toml [project.scripts]):
@@ -33,7 +33,7 @@ def convert_ome_zarr(tiff_path: Path, out: Path, channel: int = 0, quiet: bool =
             # No channel axis at all (SizeC=1 collapses to a plain 2D array
             # in some Xenium pipeline versions, e.g. gene-only panels whose
             # morphology_focus.ome.tif is DAPI-only) — unlike multi-channel
-            # bundles (axes "CYX"), there's nothing to index by channel.
+            # datasets (axes "CYX"), there's nothing to index by channel.
             if channel != 0:
                 raise ValueError(
                     f"{tiff_path} has no channel axis (axes={series.axes!r}, "

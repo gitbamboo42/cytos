@@ -19,7 +19,7 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 import zarr
 
-from cytos.core.bundle import TILES_FORMAT, SegmentLayer
+from cytos.core.slide import TILES_FORMAT, SegmentLayer
 from cytos.core.tiling import tile_world_size, visible_tile_keys
 
 
@@ -34,11 +34,11 @@ class Polygons:
 def load_polygons(boundaries_path: Path, cells_path: Path | None = None) -> Polygons:
     """Load a Xenium `*_boundaries.parquet` (long format: one row per vertex,
     consecutive rows already grouped by cell -- verified against both the
-    kidney and breast-cancer bundles) into the ragged-array model.
+    kidney and breast-cancer datasets) into the ragged-array model.
 
     If `cells_path` is given (e.g. `cells.parquet`), its per-cell attributes
     are left-joined onto `features` by the dataset's original cell id
-    (string or int, whichever the bundle uses), restoring row order to match
+    (string or int, whichever the slide uses), restoring row order to match
     `cell_id`/`offsets` afterward since Arrow joins don't preserve it.
     """
     table = pq.read_table(boundaries_path, columns=["cell_id", "vertex_x", "vertex_y"])
@@ -117,8 +117,8 @@ class PolygonTileGrid:
 
 
 def load_polygon_tile_grid(layer: SegmentLayer, world_bounds: tuple[float, float, float, float]) -> PolygonTileGrid:
-    """Open the tile store a bundle's segment layer points at. `world_bounds`
-    is the bundle's, not the layer's -- every layer shares one grid."""
+    """Open the tile store a slide's segment layer points at. `world_bounds`
+    is the slide's, not the layer's -- every layer shares one grid."""
     if layer.format != TILES_FORMAT:
         raise ValueError(f"{layer.path}: unsupported segment tile format {layer.format!r}")
 

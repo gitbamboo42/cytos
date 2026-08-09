@@ -44,10 +44,10 @@ def choose_tile_depth(
 ) -> int:
     """Grid depth whose tiles come closest to `tile_size` world units across.
 
-    Split out from `sort_and_tile` so the *bundle* can pick one depth once and
+    Split out from `sort_and_tile` so the *slide* can pick one depth once and
     hand the same one to every layer -- when each layer chose its own from its
     own extent, the polygon and point caches ended up on grids that didn't line
-    up (see `cytos.core.bundle`).
+    up (see `cytos.core.slide`).
     """
     minx, miny, maxx, maxy = world_bounds
     span = max(maxx - minx, maxy - miny)
@@ -63,7 +63,7 @@ def sort_and_tile(
     """`anchors` is one representative world (x, y) per item -- a cell's
     centroid for polygons, the point itself for transcripts.
 
-    `world_bounds` and `tile_depth` come from the bundle, not from `anchors`:
+    `world_bounds` and `tile_depth` come from the slide, not from `anchors`:
     a layer that doesn't span the whole slide still has to land on the shared
     grid.
 

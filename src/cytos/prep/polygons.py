@@ -1,6 +1,6 @@
 """Offline preprocessing for the polygon layer: triangulate every cell once,
 Hilbert-sort so spatially-close cells become memory-close, tile into the
-bundle's shared world-space grid, write to a zarr cache. See
+slide's shared world-space grid, write to a zarr cache. See
 work-notes/plan.md Phase 2 -- this is the precomputation that buys the
 renderer its speed; napari triangulates inside add_shapes() instead.
 
@@ -12,10 +12,10 @@ contiguous slice of the sorted arrays (verified in work-notes -- see
 `Polygons`/`load_polygons` in cytos.core.polygons for the loader this
 extends).
 
-Not a command of its own: `cytos-import` (`cytos.prep.bundle`) drives this,
-because the world bounds and tile depth are the *bundle's*, decided once
+Not a command of its own: `cytos-import` (`cytos.prep.slide`) drives this,
+because the world bounds and tile depth are the *slide's*, decided once
 across every layer. Running it standalone would put this layer on a grid that
-no other layer in the bundle shares.
+no other layer in the slide shares.
 """
 
 from __future__ import annotations
@@ -74,7 +74,7 @@ def prep_polygons(
     hilbert_order: int = _HILBERT_ORDER,
 ) -> dict:
     """Write `out_dir/{tiles.zarr, features.parquet}`. Takes an already-loaded
-    `Polygons` rather than a path so the importer can compute the bundle's
+    `Polygons` rather than a path so the importer can compute the slide's
     shared world bounds from it without parsing the parquet twice.
 
     Returns the manifest fields for this layer -- notably `tiles`, the index of
@@ -114,7 +114,7 @@ def prep_polygons(
     out_dir.mkdir(parents=True, exist_ok=True)
     root = zarr.open_group(str(out_dir / "tiles.zarr"), mode="w")
     # Self-describing, so a stray tile store can still be identified -- but the
-    # bundle manifest is what the viewer actually reads.
+    # slide manifest is what the viewer actually reads.
     root.attrs["hilbert_order"] = hilbert_order
     root.attrs["tile_depth"] = tile_depth
     root.attrs["world_bounds"] = [float(v) for v in world_bounds]

@@ -49,7 +49,7 @@ _OUTLINE_Z = 0.02
 
 # Percentiles, not min/max, for the feature -> color range. Cell measurements
 # are heavy-tailed the same way the fluorescence channels are (cell_area on the
-# breast-cancer bundle: median 140, 98th pct 780, max 1533), and a raw max
+# breast-cancer slide: median 140, 98th pct 780, max 1533), and a raw max
 # would push a typical cell down into the bottom tenth of the colormap.
 _FEATURE_PERCENTILES = (2.0, 98.0)
 

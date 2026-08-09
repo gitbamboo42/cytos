@@ -1,13 +1,13 @@
-"""Named sessions: saved view state, several per bundle, one window at a time.
+"""Named sessions: saved view state, several per slide, one window at a time.
 
 `cytos.json` holds a layer's defaults — colormap, contrast, which measurement
-colours it — and is shared by everyone who opens the bundle. A *session* holds
+colours it — and is shared by everyone who opens the slide. A *session* holds
 only the overrides on top, plus camera and window state, which have no default
 worth recording. Keeping them apart is what makes "reset" a real operation
 rather than a hardcoded list of magic values: clear the session, re-read the
 manifest.
 
-Several sessions per bundle, because one view is not enough for one dataset —
+Several sessions per slide, because one view is not enough for one dataset —
 two regions of the same slide are the ordinary case, and a single saved view
 means the second window silently overwrites the first. So::
 
@@ -21,8 +21,8 @@ One file per session rather than one file holding a list, specifically so two
 open windows never write the same file. That is what makes "a session belongs
 to one window" enforceable instead of merely advisory.
 
-Sessions live inside the bundle so they travel with the folder. The trade is
-that a bundle is not strictly read-only; nothing else writes into one. A
+Sessions live inside the slide so they travel with the folder. The trade is
+that a slide is not strictly read-only; nothing else writes into one. A
 session that's missing, unreadable, or from a newer cytos is ignored rather
 than fatal — a broken session must never be why a dataset won't open.
 """
@@ -39,7 +39,7 @@ SESSIONS_DIR = "sessions"
 SESSION_FORMAT = 1
 DEFAULT_SESSION_NAME = "default"
 
-# What `cytos.core.session` used to write: a single file at the bundle root.
+# What `cytos.core.session` used to write: a single file at the slide root.
 # Migrated on first open rather than dropped -- it holds real work.
 _LEGACY_NAME = "session.json"
 
@@ -60,8 +60,8 @@ class SessionInfo:
         return f"{self.name}  ·  {self.modified.strftime('%Y-%m-%d %H:%M')}"
 
 
-def sessions_dir(bundle_root: Path) -> Path:
-    return Path(bundle_root) / SESSIONS_DIR
+def sessions_dir(slide_root: Path) -> Path:
+    return Path(slide_root) / SESSIONS_DIR
 
 
 def slugify(name: str) -> str:
@@ -71,22 +71,22 @@ def slugify(name: str) -> str:
     return slug.lower() or "session"
 
 
-def session_path(bundle_root: Path, name: str) -> Path:
-    return sessions_dir(bundle_root) / f"{slugify(name)}.json"
+def session_path(slide_root: Path, name: str) -> Path:
+    return sessions_dir(slide_root) / f"{slugify(name)}.json"
 
 
-def snapshot_path(bundle_root: Path, name: str) -> Path:
-    return sessions_dir(bundle_root) / f"{slugify(name)}.png"
+def snapshot_path(slide_root: Path, name: str) -> Path:
+    return sessions_dir(slide_root) / f"{slugify(name)}.png"
 
 
-def migrate_legacy(bundle_root: Path) -> None:
+def migrate_legacy(slide_root: Path) -> None:
     """Move a pre-named-sessions `session.json` into `sessions/default.json`.
-    Runs before any listing, so old bundles just show one session called
+    Runs before any listing, so old slides just show one session called
     "default" instead of appearing to have lost their state."""
-    legacy = Path(bundle_root) / _LEGACY_NAME
+    legacy = Path(slide_root) / _LEGACY_NAME
     if not legacy.exists():
         return
-    target = session_path(bundle_root, DEFAULT_SESSION_NAME)
+    target = session_path(slide_root, DEFAULT_SESSION_NAME)
     if target.exists():
         return
     try:
@@ -100,10 +100,10 @@ def migrate_legacy(bundle_root: Path) -> None:
     print(f"migrated {legacy} -> {target}")
 
 
-def list_sessions(bundle_root: Path) -> list[SessionInfo]:
+def list_sessions(slide_root: Path) -> list[SessionInfo]:
     """Every saved session, most recently used first."""
-    migrate_legacy(bundle_root)
-    directory = sessions_dir(bundle_root)
+    migrate_legacy(slide_root)
+    directory = sessions_dir(slide_root)
     if not directory.is_dir():
         return []
 
@@ -134,10 +134,10 @@ def list_sessions(bundle_root: Path) -> list[SessionInfo]:
     return found
 
 
-def unique_session_name(bundle_root: Path, base: str = "Session") -> str:
+def unique_session_name(slide_root: Path, base: str = "Session") -> str:
     """`base`, or the first `base N` not already taken -- what a new session is
     offered as, so creating one is a single Enter rather than a naming task."""
-    taken = {s.name.lower() for s in list_sessions(bundle_root)}
+    taken = {s.name.lower() for s in list_sessions(slide_root)}
     if base.lower() not in taken:
         return base
     n = 2
@@ -146,9 +146,9 @@ def unique_session_name(bundle_root: Path, base: str = "Session") -> str:
     return f"{base} {n}"
 
 
-def load_session(bundle_root: Path, name: str) -> dict:
+def load_session(slide_root: Path, name: str) -> dict:
     """One session's saved state, or `{}` if it can't be read."""
-    path = session_path(bundle_root, name)
+    path = session_path(slide_root, name)
     if not path.exists():
         return {}
     try:
@@ -162,27 +162,27 @@ def load_session(bundle_root: Path, name: str) -> dict:
     return session
 
 
-def save_session(bundle_root: Path, name: str, session: dict, snapshot=None) -> None:
+def save_session(slide_root: Path, name: str, session: dict, snapshot=None) -> None:
     """Write a session, and its picker thumbnail if one was captured.
 
     `snapshot` is an (H, W, 3|4) uint8 array — the actual rendered frame, so
     the picker shows the region the session is about rather than the whole
     slide.
     """
-    path = session_path(bundle_root, name)
+    path = session_path(slide_root, name)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             json.dumps({"cytos_session": SESSION_FORMAT, "name": name, **session}, indent=2) + "\n"
         )
     except OSError as err:
-        # A read-only or network bundle is a normal thing to be looking at;
+        # A read-only or network slide is a normal thing to be looking at;
         # losing the view state is not a reason to fail on the way out.
         print(f"{path}: could not save session ({err})")
         return
 
     if snapshot is not None:
-        _write_snapshot(snapshot_path(bundle_root, name), snapshot)
+        _write_snapshot(snapshot_path(slide_root, name), snapshot)
 
 
 def _write_snapshot(path: Path, rgb, max_side: int = 320) -> None:
@@ -202,6 +202,6 @@ def _write_snapshot(path: Path, rgb, max_side: int = 320) -> None:
         print(f"{path}: could not save snapshot ({err})")
 
 
-def delete_session(bundle_root: Path, name: str) -> None:
-    session_path(bundle_root, name).unlink(missing_ok=True)
-    snapshot_path(bundle_root, name).unlink(missing_ok=True)
+def delete_session(slide_root: Path, name: str) -> None:
+    session_path(slide_root, name).unlink(missing_ok=True)
+    snapshot_path(slide_root, name).unlink(missing_ok=True)

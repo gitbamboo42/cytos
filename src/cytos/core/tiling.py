@@ -2,8 +2,8 @@
 cell polygons (`cytos.core.polygons`) and transcript points
 (`cytos.core.points`).
 
-Every layer in a bundle shares one `world_bounds` and one `tile_depth` (both
-fixed at import time and recorded in the manifest, see `cytos.core.bundle`), so
+Every layer in a slide shares one `world_bounds` and one `tile_depth` (both
+fixed at import time and recorded in the manifest, see `cytos.core.slide`), so
 "which tiles does this camera rect touch" is one question with one answer --
 kept here rather than copied into each layer.
 
@@ -11,7 +11,7 @@ Which tiles *exist* is answered from the manifest's tile index, an in-memory
 set, not by probing the tile store. That matters more than it sounds: tissue
 never fills its own bounding square, so most of the grid is empty and the check
 has to happen on every camera move. Probing zarr for it measured ~8 ms per move
-on the 167K-cell bundle -- about half a 60fps frame budget -- against 0.004 ms
+on the 167K-cell slide -- about half a 60fps frame budget -- against 0.004 ms
 from the index. It also keeps this module free of any storage-format import.
 
 Tiles are indexed with world Y increasing upward, the same convention as

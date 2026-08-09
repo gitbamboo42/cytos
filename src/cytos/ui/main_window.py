@@ -1,15 +1,15 @@
-"""cytos's live viewer. Opens `.cytos` bundles and nothing else — a bundle's
+"""cytos's live viewer. Opens `.cytos` slides and nothing else — a slide's
 manifest says which layers exist, how they're colored, and what world space
-they share (see `cytos.core.bundle`; `cytos-import` builds one).
+they share (see `cytos.core.slide`; `cytos-import` builds one).
 
-There is exactly one way in: File > Open Bundle…. The app starts as an empty
+There is exactly one way in: File > Open Slide…. The app starts as an empty
 window offering that menu, rather than taking a path on the command line, so a
-bundle can never arrive by a route that skips what that dialog does.
+slide can never arrive by a route that skips what that dialog does.
 Reassembling a dataset from loose paths, the way this used to work, meant
 telling the viewer every time what the data already knew — and left each layer
 free to sit on its own world grid.
 
-One process, too: a bundle's session is owned by a single window at a time, and
+One process, too: a slide's session is owned by a single window at a time, and
 that can only be enforced among windows this process can see. Launching again
 brings the running app to the front instead of starting a second one.
 
@@ -21,7 +21,7 @@ since they're assumed spatially registered.
 
 The dock panel groups by layer kind (Images, Segments, Points — see
 cytos.ui.collapsible_section), each section independently expandable, each
-holding one row per layer in the bundle:
+holding one row per layer in the slide:
 
 - Images (cytos.ui.channel_panel): colormap picker, visibility, contrast.
 - Segments (cytos.ui.segment_panel): outline/fill toggles, fill opacity, and a
@@ -50,7 +50,7 @@ from PySide6 import QtCore, QtGui, QtNetwork, QtWidgets
 # is unused -- see main() for why this app runs Qt's loop directly.
 import rendercanvas.qt  # noqa: F401
 
-from cytos.core.bundle import load_bundle
+from cytos.core.slide import load_slide
 from cytos.core.image import load_pyramid_levels, select_level
 from cytos.core.session import load_session, save_session
 from cytos.core.points import load_point_tile_grid
@@ -78,8 +78,8 @@ _STATE_FIELDS = {
 }
 
 
-def _iter_layers(bundle):
-    for kind, layers in (("image", bundle.images), ("segments", bundle.segments), ("points", bundle.points)):
+def _iter_layers(slide):
+    for kind, layers in (("image", slide.images), ("segments", slide.segments), ("points", slide.points)):
         for layer in layers:
             yield f"{kind}:{layer.id}", kind, layer
 
@@ -128,7 +128,7 @@ class _MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.save_now = None
-        self.bundle_root = None
+        self.slide_root = None
         # Every window is bound to exactly one session, and no two windows to
         # the same one -- see cytos.ui.session_picker.
         self.session_name = None
@@ -140,9 +140,9 @@ class _MainWindow(QtWidgets.QMainWindow):
         if self in _OPEN_WINDOWS:
             _OPEN_WINDOWS.remove(self)
 
-        # Closing the last bundle returns to the welcome window rather than
+        # Closing the last slide returns to the welcome window rather than
         # quitting: there's no path on the command line any more, so quitting
-        # would mean relaunching just to look at a different bundle. Closing
+        # would mean relaunching just to look at a different slide. Closing
         # the welcome window itself does quit, so "close windows until they're
         # gone" still ends the app.
         #
@@ -157,7 +157,7 @@ class _MainWindow(QtWidgets.QMainWindow):
 def _default_channel_name(path: str) -> str:
     """Folder name with the OME-Zarr suffix stripped, e.g. 'dapi.ome.zarr' ->
     'dapi' — used when a channel is opened via the file dialog instead of
-    coming from the bundle manifest."""
+    coming from the slide manifest."""
     name = Path(path).name
     for suffix in (".ome.zarr", ".zarr"):
         if name.endswith(suffix):
@@ -165,15 +165,15 @@ def _default_channel_name(path: str) -> str:
     return name
 
 
-def prompt_open_bundle(parent, max_tiles: int) -> bool:
-    """Ask for a bundle and open each pick in its own window. Returns whether
+def prompt_open_slide(parent, max_tiles: int) -> bool:
+    """Ask for a slide and open each pick in its own window. Returns whether
     anything opened.
 
     The one way into the app: startup calls this with no parent, File > Open
-    Bundle… calls it from a window. Same dialog, same code path, so a bundle
+    Slide… calls it from a window. Same dialog, same code path, so a slide
     can't arrive by a route that skips whatever this does.
     """
-    dialog = QtWidgets.QFileDialog(parent, "Open .cytos bundle")
+    dialog = QtWidgets.QFileDialog(parent, "Open .cytos slide")
     dialog.setFileMode(QtWidgets.QFileDialog.FileMode.Directory)
     dialog.setOption(QtWidgets.QFileDialog.Option.ShowDirsOnly, True)
     dialog.setOption(QtWidgets.QFileDialog.Option.DontUseNativeDialog, True)
@@ -188,33 +188,33 @@ def prompt_open_bundle(parent, max_tiles: int) -> bool:
             if build_window(Path(path), max_tiles, parent=parent) is not None:
                 opened = True
         except (ValueError, KeyError, OSError) as err:
-            QtWidgets.QMessageBox.warning(parent, "Could not open bundle", str(err))
+            QtWidgets.QMessageBox.warning(parent, "Could not open slide", str(err))
     return opened
 
 
 def build_welcome_window(max_tiles: int) -> QtWidgets.QMainWindow:
-    """The window the app starts in: no bundle, just the menu that opens one.
+    """The window the app starts in: no slide, just the menu that opens one.
 
     Starting with a file dialog already up puts a modal in front of someone who
     hasn't asked for anything yet. An empty window with a visible File menu
     says the same thing without blocking, and it's where napari, Fiji and most
-    viewers start too. It closes itself once a bundle is actually open.
+    viewers start too. It closes itself once a slide is actually open.
     """
     win = QtWidgets.QMainWindow()
     win.setWindowTitle("cytos")
     win.resize(760, 480)
 
-    label = QtWidgets.QLabel("No bundle open\n\nFile ▸ Open Bundle…")
+    label = QtWidgets.QLabel("No slide open\n\nFile ▸ Open Slide…")
     label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
     label.setStyleSheet("QLabel { background: #141414; color: #9a9a9a; font-size: 15px; }")
     win.setCentralWidget(label)
 
     def on_open():
-        if prompt_open_bundle(win, max_tiles):
+        if prompt_open_slide(win, max_tiles):
             win.close()
 
     file_menu = win.menuBar().addMenu("File")
-    open_action = file_menu.addAction("Open Bundle…")
+    open_action = file_menu.addAction("Open Slide…")
     open_action.setShortcut(QtGui.QKeySequence.StandardKey.Open)
     open_action.triggered.connect(on_open)
 
@@ -233,52 +233,52 @@ def build_app_menu_bar(max_tiles: int) -> QtWidgets.QMenuBar:
 
     bar = QtWidgets.QMenuBar()  # deliberately no parent
     file_menu = bar.addMenu("File")
-    action = file_menu.addAction("Open Bundle…")
+    action = file_menu.addAction("Open Slide…")
     action.setShortcut(QtGui.QKeySequence.StandardKey.Open)
-    action.triggered.connect(lambda: prompt_open_bundle(None, max_tiles))
+    action.triggered.connect(lambda: prompt_open_slide(None, max_tiles))
     _APP_MENU_BAR = bar
     return bar
 
 
-def build_window(bundle_path: Path, max_tiles: int = 64, parent=None) -> _MainWindow | None:
-    """Open one bundle in its own window and return it, already shown. Returns
+def build_window(slide_path: Path, max_tiles: int = 64, parent=None) -> _MainWindow | None:
+    """Open one slide in its own window and return it, already shown. Returns
     None if the session picker was cancelled.
 
     Every window is fully independent — own scene, camera, tile caches, dock,
-    and its own session — so opening a second bundle, or a second view of the
-    same bundle, never disturbs the first.
+    and its own session — so opening a second slide, or a second view of the
+    same slide, never disturbs the first.
     """
-    bundle = load_bundle(bundle_path)
+    slide = load_slide(slide_path)
     print(
-        f"bundle '{bundle.name}': {len(bundle.images)} image(s), "
-        f"{len(bundle.segments)} segment layer(s), {len(bundle.points)} point layer(s)"
+        f"slide '{slide.name}': {len(slide.images)} image(s), "
+        f"{len(slide.segments)} segment layer(s), {len(slide.points)} point layer(s)"
     )
 
-    # Anything already open on this bundle is written out before the picker
+    # Anything already open on this slide is written out before the picker
     # appears. Otherwise a session's preview is the frame from when its window
     # was last closed, which for a window still open is the one view you can be
-    # sure is out of date. Only this bundle's windows: no others are listed.
+    # sure is out of date. Only this slide's windows: no others are listed.
     for open_window in _OPEN_WINDOWS:
-        if open_window.bundle_root == bundle.root and open_window.save_now is not None:
+        if open_window.slide_root == slide.root and open_window.save_now is not None:
             open_window.save_now()
 
-    # Which sessions of this bundle are spoken for. One window per session, so
+    # Which sessions of this slide are spoken for. One window per session, so
     # two windows never write the same file -- the picker greys these out.
     in_use = {
-        w.session_name for w in _OPEN_WINDOWS if w.bundle_root == bundle.root and w.session_name
+        w.session_name for w in _OPEN_WINDOWS if w.slide_root == slide.root and w.session_name
     }
-    session_name = choose_session(bundle.root, bundle.name, in_use, parent)
+    session_name = choose_session(slide.root, slide.name, in_use, parent)
     if session_name is None:
-        print(f"bundle '{bundle.name}': no session chosen, not opening")
+        print(f"slide '{slide.name}': no session chosen, not opening")
         return None
 
     # The manifest's values are the defaults; the session overrides them.
     # Snapshot the defaults *before* overriding, so "reset" has something real
     # to go back to (see cytos.core.session).
-    session = load_session(bundle.root, session_name)
+    session = load_session(slide.root, session_name)
     saved_layers = session.get("layers", {})
     defaults = {}
-    for key, kind, layer in _iter_layers(bundle):
+    for key, kind, layer in _iter_layers(slide):
         defaults[key] = _capture(layer, kind)
         if key in saved_layers:
             _restore(layer, kind, saved_layers[key])
@@ -290,9 +290,9 @@ def build_window(bundle_path: Path, max_tiles: int = 64, parent=None) -> _MainWi
     # background color show through the canvas instead of true black.
     scene.add(gfx.Background(None, gfx.BackgroundMaterial("#000000")))
 
-    # The bundle's own world bounds, not a union recomputed from whatever
+    # The slide's own world bounds, not a union recomputed from whatever
     # happens to be loaded: every layer was placed against these at import.
-    minx, miny, maxx, maxy = bundle.world_bounds
+    minx, miny, maxx, maxy = slide.world_bounds
 
     channels: list[Channel] = []
 
@@ -311,7 +311,7 @@ def build_window(bundle_path: Path, max_tiles: int = 64, parent=None) -> _MainWi
 
         levels = load_pyramid_levels(Path(path))
         if clim is None:
-            # Only for channels opened loose via File > Open — a bundle's
+            # Only for channels opened loose via File > Open — a slide's
             # clim was measured at import and lives in the manifest.
             coarsest = np.asarray(levels[-1].data)
             clim = tuple(float(v) for v in np.percentile(coarsest, [1, 99.5]))
@@ -320,18 +320,18 @@ def build_window(bundle_path: Path, max_tiles: int = 64, parent=None) -> _MainWi
         print(f"channel '{name}': {path} colormap={colormap} clim={tuple(round(float(v), 1) for v in clim)}")
         return Channel(name=name, colormap=colormap, levels=levels, cache=cache)
 
-    # (layer, channel) per image in the bundle — File > Open adds channels to
-    # `channels` that have no bundle layer behind them, so they aren't here.
+    # (layer, channel) per image in the slide — File > Open adds channels to
+    # `channels` that have no slide layer behind them, so they aren't here.
     image_layers = []
-    for layer in bundle.images:
+    for layer in slide.images:
         ch = build_channel(layer.path, layer.colormap, layer.id, layer.clim)
         channels.append(ch)
         image_layers.append((layer, ch))
 
-    # (layer, grid, cache, numeric feature names) per segment layer in the bundle.
+    # (layer, grid, cache, numeric feature names) per segment layer in the slide.
     segment_layers = []
-    for layer in bundle.segments:
-        grid = load_polygon_tile_grid(layer, bundle.world_bounds)
+    for layer in slide.segments:
+        grid = load_polygon_tile_grid(layer, slide.world_bounds)
         feature_names = numeric_feature_names(grid.features)
         # The manifest's choice, unless the feature table can't back it.
         color_by = layer.color_by if layer.color_by in feature_names else None
@@ -354,8 +354,8 @@ def build_window(bundle_path: Path, max_tiles: int = 64, parent=None) -> _MainWi
 
     # (layer, grid, cache) per point layer.
     point_layers = []
-    for layer in bundle.points:
-        grid = load_point_tile_grid(layer, bundle.world_bounds)
+    for layer in slide.points:
+        grid = load_point_tile_grid(layer, slide.world_bounds)
         cache = PointTileCache(
             grid,
             max_tiles=max_tiles,
@@ -375,9 +375,9 @@ def build_window(bundle_path: Path, max_tiles: int = 64, parent=None) -> _MainWi
     QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
     win = _MainWindow()
     # The session is in the title because it's what tells two windows on the
-    # same bundle apart -- which region you're looking at, not a bare "(2)".
-    win.setWindowTitle(f"cytos — {bundle.name} · {session_name}")
-    win.bundle_root = bundle.root
+    # same slide apart -- which region you're looking at, not a bare "(2)".
+    win.setWindowTitle(f"cytos — {slide.name} · {session_name}")
+    win.slide_root = slide.root
     win.session_name = session_name
     win.max_tiles = max_tiles
     win.resize(1300, 950)
@@ -387,7 +387,7 @@ def build_window(bundle_path: Path, max_tiles: int = 64, parent=None) -> _MainWi
     renderer = gfx.WgpuRenderer(render_widget)
     camera = gfx.OrthographicCamera()
 
-    def fit_camera_to_bundle() -> None:
+    def fit_camera_to_slide() -> None:
         camera.show_rect(minx, maxx, miny, maxy)
 
     saved_camera = session.get("camera")
@@ -396,7 +396,7 @@ def build_window(bundle_path: Path, max_tiles: int = 64, parent=None) -> _MainWi
         cw, chh = saved_camera["size"]
         camera.show_rect(cx - cw / 2, cx + cw / 2, cy - chh / 2, cy + chh / 2)
     else:
-        fit_camera_to_bundle()
+        fit_camera_to_slide()
     gfx.PanZoomController(camera, register_events=renderer)
 
     dock_widget = QtWidgets.QWidget()
@@ -437,7 +437,7 @@ def build_window(bundle_path: Path, max_tiles: int = 64, parent=None) -> _MainWi
     # on restores each layer to whatever its own checkbox last said, rather
     # than force-showing layers the user had individually hidden.
     segment_visibility = {layer.id: layer.visible for layer, *_ in segment_layers}
-    # (layer, feature names, row) — kept so "Reset to Bundle Defaults" and the
+    # (layer, feature names, row) — kept so "Reset to Slide Defaults" and the
     # session save on close can reach every row.
     segment_rows = []
     point_rows = []
@@ -596,7 +596,7 @@ def build_window(bundle_path: Path, max_tiles: int = 64, parent=None) -> _MainWi
             return
 
         # An OME-Zarr store is a *folder*, so a directory picker can't filter
-        # out the wrong ones -- picking a bundle root or a segments folder is
+        # out the wrong ones -- picking a slide root or a segments folder is
         # an ordinary mistake. Report it in the window instead of raising into
         # Qt's slot handler, which prints a traceback to a terminal the user
         # may not even be looking at and leaves the dialog looking ignored.
@@ -628,7 +628,7 @@ def build_window(bundle_path: Path, max_tiles: int = 64, parent=None) -> _MainWi
     dock.setObjectName("layers_dock")
     # The panel scrolls rather than forcing the window to be tall enough for it.
     # A dock's minimum height is its content's, and the content's is the sum of
-    # every expanded section -- 955px on a three-layer bundle, which is more
+    # every expanded section -- 955px on a three-layer slide, which is more
     # vertical room than a laptop screen has once the menu bar and title bar are
     # taken out. The window then can't shrink below that and can't grow past the
     # screen, so its height stops moving at all while its width still works.
@@ -652,16 +652,16 @@ def build_window(bundle_path: Path, max_tiles: int = 64, parent=None) -> _MainWi
     )
     win.addDockWidget(QtCore.Qt.DockWidgetArea.RightDockWidgetArea, dock)
 
-    def open_bundle():
-        prompt_open_bundle(win, max_tiles)
+    def open_slide():
+        prompt_open_slide(win, max_tiles)
 
     file_menu = win.menuBar().addMenu("File")
     # Always a new window, never a replacement: comparing two samples, or two
-    # regions of one sample, is the reason to open a second bundle at all.
-    open_action = file_menu.addAction("Open Bundle…")
+    # regions of one sample, is the reason to open a second slide at all.
+    open_action = file_menu.addAction("Open Slide…")
     open_action.setShortcut(QtGui.QKeySequence.StandardKey.Open)
-    open_action.triggered.connect(open_bundle)
-    # "Add", not "Open": the bundle is already open, and this puts another
+    open_action.triggered.connect(open_slide)
+    # "Add", not "Open": the slide is already open, and this puts another
     # image on top of it rather than replacing anything. The dialog takes
     # several folders at once, so no "(s)" is needed in the label.
     add_action = file_menu.addAction("Add Image…")
@@ -708,7 +708,7 @@ def build_window(bundle_path: Path, max_tiles: int = 64, parent=None) -> _MainWi
         """Back to exactly what `cytos-import` wrote, and forget the session.
         Every `apply` below re-emits its row's signals, so the tile caches
         follow the widgets rather than needing a second update path."""
-        for key, kind, layer in _iter_layers(bundle):
+        for key, kind, layer in _iter_layers(slide):
             _restore(layer, kind, defaults[key])
         for layer, ch, row in image_rows:
             row.apply(layer.colormap, layer.visible, layer.clim or ch.cache.clim)
@@ -723,15 +723,15 @@ def build_window(bundle_path: Path, max_tiles: int = 64, parent=None) -> _MainWi
         images_section.apply(True, True)
         segments_section.apply(True, True)
         points_section.apply(False, True)
-        fit_camera_to_bundle()
+        fit_camera_to_slide()
         refresh_minimap()
         # The session file isn't deleted -- you named it, so it stays and is
-        # simply back to holding nothing but the bundle's own defaults, which
+        # simply back to holding nothing but the slide's own defaults, which
         # is what gets written on the next save.
-        print(f"session '{session_name}': reset to bundle defaults")
+        print(f"session '{session_name}': reset to slide defaults")
 
     menu.addSeparator()
-    reset_action = menu.addAction("Reset to Bundle Defaults")
+    reset_action = menu.addAction("Reset to Slide Defaults")
     reset_action.triggered.connect(reset_to_defaults)
 
     def snapshot():
@@ -744,7 +744,7 @@ def build_window(bundle_path: Path, max_tiles: int = 64, parent=None) -> _MainWi
             return None
 
     def save_now():
-        save_session(bundle.root, session_name, collect_session(), snapshot())
+        save_session(slide.root, session_name, collect_session(), snapshot())
 
     win.save_now = save_now
 
@@ -817,7 +817,7 @@ def build_window(bundle_path: Path, max_tiles: int = 64, parent=None) -> _MainWi
     return win
 
 
-# One app, not one per bundle. Sessions are owned by a single window at a time
+# One app, not one per slide. Sessions are owned by a single window at a time
 # (see cytos.core.session), and that rule can only be enforced against windows
 # this process can see -- a second process would happily open a session the
 # first one already has.
@@ -827,8 +827,8 @@ _ipc_server = None  # module-level: a QLocalServer that goes out of scope stops 
 
 def _raise_all_windows() -> None:
     # Every visible top-level window, not just _OPEN_WINDOWS -- the welcome
-    # window has no bundle behind it and so isn't in that list, but it's
-    # exactly what's on screen when a second launch happens before any bundle
+    # window has no slide behind it and so isn't in that list, but it's
+    # exactly what's on screen when a second launch happens before any slide
     # has been opened.
     for win in QtWidgets.QApplication.topLevelWidgets():
         if isinstance(win, QtWidgets.QMainWindow) and win.isVisible():

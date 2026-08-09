@@ -38,7 +38,7 @@ class SegmentRow(QtWidgets.QGroupBox):
         super().__init__(title)
         layout = QtWidgets.QFormLayout(self)
 
-        # A bundle can hold several segment layers (cell and nucleus
+        # A slide can hold several segment layers (cell and nucleus
         # boundaries, say), so each needs its own on/off -- the section
         # checkbox above is the master for all of them, the way ChannelRow
         # sits under the Images section.
