@@ -100,6 +100,10 @@ def _restore(layer, kind: str, state: dict) -> None:
 # a menu handler whose locals then go out of scope.
 _OPEN_WINDOWS: list["_MainWindow"] = []
 
+# Width of the layer panel's contents — see where it is applied for why it is
+# pinned rather than merely a minimum.
+_DOCK_WIDTH = 340
+
 # The welcome window needs holding for the same reason, and it was previously
 # dropped on the floor: its only reference was the return value of the call
 # that made it. A collected window takes its menu bar with it, which on macOS
@@ -115,13 +119,15 @@ _APP_MENU_BAR = None
 
 
 class _MainWindow(QtWidgets.QMainWindow):
-    """QMainWindow that runs a callback on close — where the session is
-    written. Saving on close rather than on every widget change keeps the file
-    quiet and keeps "reset to defaults" from racing an autosave."""
+    """QMainWindow that writes its session on close, via `save_now`. Saving on
+    close rather than on every widget change keeps the file quiet and keeps
+    "reset to defaults" from racing an autosave. It is also called from outside
+    -- see `build_window` -- whenever someone needs the file on disk to match
+    what this window is showing."""
 
     def __init__(self):
         super().__init__()
-        self.on_close = None
+        self.save_now = None
         self.bundle_root = None
         # Every window is bound to exactly one session, and no two windows to
         # the same one -- see cytos.ui.session_picker.
@@ -129,8 +135,8 @@ class _MainWindow(QtWidgets.QMainWindow):
         self.max_tiles = 64
 
     def closeEvent(self, event):  # noqa: N802 - Qt's own naming
-        if self.on_close is not None:
-            self.on_close()
+        if self.save_now is not None:
+            self.save_now()
         if self in _OPEN_WINDOWS:
             _OPEN_WINDOWS.remove(self)
 
@@ -247,6 +253,14 @@ def build_window(bundle_path: Path, max_tiles: int = 64, parent=None) -> _MainWi
         f"bundle '{bundle.name}': {len(bundle.images)} image(s), "
         f"{len(bundle.segments)} segment layer(s), {len(bundle.points)} point layer(s)"
     )
+
+    # Anything already open on this bundle is written out before the picker
+    # appears. Otherwise a session's preview is the frame from when its window
+    # was last closed, which for a window still open is the one view you can be
+    # sure is out of date. Only this bundle's windows: no others are listed.
+    for open_window in _OPEN_WINDOWS:
+        if open_window.bundle_root == bundle.root and open_window.save_now is not None:
+            open_window.save_now()
 
     # Which sessions of this bundle are spoken for. One window per session, so
     # two windows never write the same file -- the picker greys these out.
@@ -394,7 +408,7 @@ def build_window(bundle_path: Path, max_tiles: int = 64, parent=None) -> _MainWi
     # expands. A *minimum* isn't enough -- Qt still grows the dock up to the
     # expanded content's sizeHint; only a fixed width can't change at all.
     # 340 clears the measured 317px with margin for longer colormap names.
-    dock_widget.setFixedWidth(340)
+    dock_widget.setFixedWidth(_DOCK_WIDTH)
 
     minimap = MinimapWidget(world_bounds=(minx, miny, maxx, maxy))
 
@@ -612,7 +626,25 @@ def build_window(bundle_path: Path, max_tiles: int = 64, parent=None) -> _MainWi
     # restoreState matches docks by objectName; without one the saved layout
     # silently comes back at the default position.
     dock.setObjectName("layers_dock")
-    dock.setWidget(dock_widget)
+    # The panel scrolls rather than forcing the window to be tall enough for it.
+    # A dock's minimum height is its content's, and the content's is the sum of
+    # every expanded section -- 955px on a three-layer bundle, which is more
+    # vertical room than a laptop screen has once the menu bar and title bar are
+    # taken out. The window then can't shrink below that and can't grow past the
+    # screen, so its height stops moving at all while its width still works.
+    dock_scroll = QtWidgets.QScrollArea()
+    dock_scroll.setWidget(dock_widget)
+    # Without this the scroll area shows the panel at its minimum size in a
+    # corner instead of filling the width it was given.
+    dock_scroll.setWidgetResizable(True)
+    dock_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+    dock_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    # The panel inside is pinned to _DOCK_WIDTH, so the scroll area has to be
+    # that much wider again to leave room for its own scrollbar -- otherwise the
+    # bar sits on top of the panel's right edge and clips the widest controls.
+    scrollbar_width = dock_scroll.style().pixelMetric(QtWidgets.QStyle.PixelMetric.PM_ScrollBarExtent)
+    dock_scroll.setFixedWidth(_DOCK_WIDTH + scrollbar_width)
+    dock.setWidget(dock_scroll)
     dock.setFeatures(
         QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetMovable
         | QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetFloatable
@@ -714,7 +746,7 @@ def build_window(bundle_path: Path, max_tiles: int = 64, parent=None) -> _MainWi
     def save_now():
         save_session(bundle.root, session_name, collect_session(), snapshot())
 
-    win.on_close = save_now
+    win.save_now = save_now
 
     saved_window = session.get("window")
     if saved_window:
@@ -768,7 +800,13 @@ def build_window(bundle_path: Path, max_tiles: int = 64, parent=None) -> _MainWi
         stats_label.setText(latest_stats_text[0])
         minimap.set_view_rect(latest_world_rect[0])
 
-    stats_timer = QtCore.QTimer()
+    # Parented to the window, so the window owns it. Without a parent nothing
+    # holds this timer once build_window returns, Python collects it on the way
+    # out, and it silently stops -- taking the minimap's view rectangle and the
+    # live stats text with it, since tick() is the only thing that updates
+    # either. It survived only while this code lived inside main(), whose frame
+    # stays alive for as long as the app runs.
+    stats_timer = QtCore.QTimer(win)
     stats_timer.timeout.connect(tick)
     stats_timer.start(100)
 
@@ -825,6 +863,34 @@ def _claim_single_instance() -> bool:
     return True
 
 
+def _shutdown_gpu() -> None:
+    """Drain and stop wgpu's poll thread while Qt is still standing.
+
+    wgpu delivers finished GPU work on a background thread it starts per device,
+    and that thread hands the result to the Qt main thread by emitting a signal.
+    On the way out PySide invalidates the object that signal is emitted from, so
+    a readback landing late -- the closing snapshot's, usually -- raises inside a
+    C callback, where the exception has nowhere to go and gets printed as
+    "Exception ignored". Harmless in itself, but a traceback on every exit is
+    exactly the kind of noise that gets you used to skipping the console.
+
+    Blocking on the device first lets anything genuinely in flight report back
+    while the receiver is still alive; stopping the poller then guarantees
+    nothing else is dispatched afterwards.
+    """
+    from pygfx.renderers.wgpu.engine.shared import Shared
+
+    shared = Shared.get_instance()  # None if no window ever opened, so no device
+    if shared is None:
+        return
+    device = shared.device
+    device._poll_wait()
+    # Private, and only a tidy-up -- worth checking for rather than depending on.
+    poller = getattr(device, "_poller", None)
+    if poller is not None:
+        poller.stop()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--max-tiles", type=int, default=64, help="GPU tile cache size, per layer")
@@ -845,6 +911,7 @@ def main() -> None:
     # calls app.exec() itself, and its canvases are Qt widgets driven by this
     # loop regardless of who started it.
     app.exec()
+    _shutdown_gpu()
 
 
 if __name__ == "__main__":

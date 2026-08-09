@@ -109,6 +109,13 @@ while building the tool, not facts about the input data itself.
   instead of raising. `src/cytos/prep/pyramid.py` checks `series.axes` and
   only indexes by channel when a channel axis actually exists.
 
+## Errors and warnings
+
+Take every error and warning seriously, even harmless-looking ones — fix the
+cause, or say why it stays. Console noise trains you to stop reading it. wgpu/Qt
+teardown messages look like somebody else's problem and usually aren't (see
+`_shutdown_gpu` in `src/cytos/ui/main_window.py`).
+
 ## Environment
 
 Python setup (conda envs, interpreter paths) is in the gitignored

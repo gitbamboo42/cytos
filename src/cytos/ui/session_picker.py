@@ -27,6 +27,10 @@ from cytos.core.session import (
 )
 
 _THUMB = QtCore.QSize(128, 96)
+# Saved frames come in whatever shape the window was, so the preview is padded
+# out to exactly _THUMB rather than shrunk to fit. Dark grey reads as empty
+# padding next to a rendered frame, not as part of it.
+_THUMB_PADDING = QtGui.QColor(38, 38, 38)
 
 
 class SessionPicker(QtWidgets.QDialog):
@@ -90,13 +94,44 @@ class SessionPicker(QtWidgets.QDialog):
         item = QtWidgets.QListWidgetItem(f"{info.label}{'   (open in another window)' if busy else ''}")
         item.setData(QtCore.Qt.ItemDataRole.UserRole, info.name)
         item.setSizeHint(QtCore.QSize(0, _THUMB.height() + 12))
-        if info.snapshot is not None:
-            item.setIcon(QtGui.QIcon(str(info.snapshot)))
-        else:
-            item.setIcon(QtGui.QIcon())
+        item.setIcon(self._thumb_icon(info.snapshot))
         if busy:
             item.setFlags(item.flags() & ~QtCore.Qt.ItemFlag.ItemIsSelectable & ~QtCore.Qt.ItemFlag.ItemIsEnabled)
         return item
+
+    def _thumb_icon(self, snapshot: Path | None) -> QtGui.QIcon:
+        """A preview card of exactly `_THUMB`, whatever shape the frame was.
+
+        Handing the file straight to `QIcon` lets Qt scale it, which gives every
+        row a differently sized icon -- a wide frame comes back short, a tall
+        one narrow -- so the names beside them never line up. Painting the frame
+        centred on a fixed grey card keeps one clean column edge down the whole
+        list, and a session with no snapshot yet gets the bare card, so it lines
+        up too.
+        """
+        ratio = self.devicePixelRatioF()
+        card = QtGui.QPixmap(_THUMB * ratio)
+        card.setDevicePixelRatio(ratio)
+        card.fill(_THUMB_PADDING)
+
+        frame = QtGui.QPixmap(str(snapshot)) if snapshot is not None else QtGui.QPixmap()
+        if not frame.isNull():
+            frame = frame.scaled(
+                _THUMB * ratio,
+                QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                QtCore.Qt.TransformationMode.SmoothTransformation,
+            )
+            frame.setDevicePixelRatio(ratio)
+            painter = QtGui.QPainter(card)
+            painter.drawPixmap(
+                QtCore.QPointF(
+                    (_THUMB.width() - frame.width() / ratio) / 2,
+                    (_THUMB.height() - frame.height() / ratio) / 2,
+                ),
+                frame,
+            )
+            painter.end()
+        return QtGui.QIcon(card)
 
     def _select(self, name: str) -> None:
         """Put the cursor on `name` — after creating a session, so Open is one

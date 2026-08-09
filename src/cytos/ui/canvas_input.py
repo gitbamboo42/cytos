@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import math
 
+import shiboken6
 from PySide6 import QtCore, QtGui
 from rendercanvas.qt import RenderWidget as _BaseRenderWidget
 
@@ -31,6 +32,22 @@ class CanvasRenderWidget(_BaseRenderWidget):
         if event.type() == QtCore.QEvent.Type.Gesture and self._handle_gesture(event):
             return True
         return super().event(event)
+
+    def _rc_request_paint(self):
+        """Skip the repaint when this widget is already gone.
+
+        Closing a window deletes the canvas straight away, but a frame can still
+        be mid-present at that moment; when it finishes, rendercanvas asks the
+        canvas to repaint (`base.py:_finish_present`) with no check that it still
+        exists, and Qt raises from the deleted C++ object. It catches and logs
+        that itself, so the only cost is a traceback on the way out -- but a
+        traceback that shows up every so often on exit is one you learn to scroll
+        past. There is nothing to paint into once the widget is gone, so this
+        drops the request instead.
+        """
+        if not shiboken6.isValid(self):
+            return
+        super()._rc_request_paint()
 
     def _handle_gesture(self, event) -> bool:
         pinch = event.gesture(QtCore.Qt.GestureType.PinchGesture)
