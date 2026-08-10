@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import shutil
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -336,15 +337,22 @@ def main() -> None:
         help="repeatable; use these images instead of whatever the source offers",
     )
     args = parser.parse_args()
-    import_slide(
-        args.source,
-        args.out,
-        name=args.name,
-        tile_size=args.tile_size,
-        min_qv=args.min_qv,
-        genes_only=not args.keep_controls,
-        images_override=args.image,
-    )
+    try:
+        import_slide(
+            args.source,
+            args.out,
+            name=args.name,
+            tile_size=args.tile_size,
+            min_qv=args.min_qv,
+            genes_only=not args.keep_controls,
+            images_override=args.image,
+        )
+    except (ValueError, KeyError, OSError) as err:
+        # Pointing this at the wrong folder is an ordinary mistake, not a bug,
+        # and a traceback answers a question nobody asked. The message is the
+        # whole of what's useful, and it is what the import window shows.
+        print(f"error: {err}", file=sys.stderr)
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":

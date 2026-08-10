@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from importlib import metadata
 from pathlib import Path
 
 import numpy as np
@@ -50,7 +51,7 @@ from PySide6 import QtCore, QtGui, QtNetwork, QtWidgets
 # is unused -- see main() for why this app runs Qt's loop directly.
 import rendercanvas.qt  # noqa: F401
 
-from cytos.core.slide import load_slide
+from cytos.core.slide import SLIDE_SUFFIX, load_slide
 from cytos.core.image import load_pyramid_levels, select_level
 from cytos.core.session import load_session, save_session
 from cytos.core.points import load_point_tile_grid
@@ -67,6 +68,7 @@ from cytos.ui.points_panel import PointsRow
 from cytos.ui.segment_panel import SegmentRow
 from cytos.ui.session_picker import choose_session
 from cytos.ui.canvas_input import CanvasRenderWidget
+from cytos.ui.import_window import ImportPanel
 
 
 # Which fields of each layer kind a session may override. The manifest holds
@@ -193,6 +195,102 @@ def prompt_open_slide(parent, max_tiles: int) -> bool:
     return opened
 
 
+def _place_window(win: QtWidgets.QWidget) -> None:
+    """Centre a window on its screen, nudged down-right per window already open.
+
+    Qt puts an unpositioned window wherever the platform feels like, which on
+    macOS is the top-left corner every time -- so a second window lands exactly
+    on the first. Centring is the expected place for a window nobody has moved
+    yet, and the cascade keeps a stack of them individually reachable.
+    """
+    screen = win.screen() or QtWidgets.QApplication.primaryScreen()
+    if screen is None:
+        return
+    area = screen.availableGeometry()
+    # Wraps rather than marching off the screen when many are open.
+    step = 30 * (len(_OPEN_WINDOWS) % 6)
+    x = area.x() + max(0, (area.width() - win.width()) // 2) + step
+    y = area.y() + max(0, (area.height() - win.height()) // 3) + step
+    win.move(x, y)
+
+
+def _version() -> str:
+    """The installed package version, or a placeholder when cytos is being run
+    from a checkout that was never installed."""
+    try:
+        return metadata.version("cytos")
+    except metadata.PackageNotFoundError:
+        return "dev"
+
+
+def prompt_new_slide(parent, max_tiles: int) -> bool:
+    """Build a slide from a source dataset, in a window that becomes the viewer
+    once it's built. Returns whether an import started.
+
+    The window exists from the moment you ask for the slide, not from the moment
+    the slide is ready: an import is minutes of work, and a viewer that shows
+    nothing until it finishes leaves you unable to tell progress from a hang.
+    So this is the same `_MainWindow` the slide will end up in -- it just spends
+    its first minutes showing the importer's log (see `cytos.ui.import_window`).
+    """
+    # Non-native, matching prompt_open_slide: the two pickers sit in one menu,
+    # and Qt's own dialog is the one that reliably selects a folder.
+    picker = QtWidgets.QFileDialog(parent, "Choose a Xenium output folder")
+    picker.setFileMode(QtWidgets.QFileDialog.FileMode.Directory)
+    picker.setOption(QtWidgets.QFileDialog.Option.ShowDirsOnly, True)
+    picker.setOption(QtWidgets.QFileDialog.Option.DontUseNativeDialog, True)
+    if not picker.exec() or not picker.selectedFiles():
+        return False
+    source_path = Path(picker.selectedFiles()[0])
+
+    saver = QtWidgets.QFileDialog(parent, "Save the new slide as")
+    saver.setAcceptMode(QtWidgets.QFileDialog.AcceptMode.AcceptSave)
+    saver.setOption(QtWidgets.QFileDialog.Option.DontUseNativeDialog, True)
+    saver.setDirectory(str(source_path.parent))
+    saver.selectFile(f"{source_path.name}{SLIDE_SUFFIX}")
+    if not saver.exec() or not saver.selectedFiles():
+        return False
+    out_path = Path(saver.selectedFiles()[0])
+
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+    win = _MainWindow()
+    win.max_tiles = max_tiles
+    # The title it will keep once it's a viewer, so the window doesn't rename
+    # itself out from under you halfway through.
+    win.setWindowTitle(f"cytos — {out_path.stem}")
+    panel = ImportPanel(source_path, out_path, parent=win)
+    win.setCentralWidget(panel)
+    file_menu = win.menuBar().addMenu("File")
+    file_menu.addAction("Open Slide…").triggered.connect(lambda: prompt_open_slide(win, max_tiles))
+
+    def become_viewer() -> None:
+        try:
+            build_window(out_path, max_tiles, parent=win, win=win)
+        except (ValueError, KeyError, OSError) as err:
+            QtWidgets.QMessageBox.warning(win, "Could not open the new slide", str(err))
+
+    def on_finished(ok: bool) -> None:
+        if not ok:
+            return  # panel keeps the log on screen; closing the window is the way out
+        # Not inline: taking over the window deletes the panel, and doing that
+        # while the panel's own signal is still being delivered means the rest
+        # of the emit runs on a destroyed object. A zero timer lets the signal
+        # finish first.
+        QtCore.QTimer.singleShot(0, become_viewer)
+
+    panel.finished.connect(on_finished)
+    # After the menu bar exists, since that is part of what the window has to fit.
+    panel.adjust_window()
+    _place_window(win)
+    win.show()
+    # In _OPEN_WINDOWS from the start: it is a slide window that happens to
+    # still be loading, so the "last window closed" bookkeeping needs it, and
+    # nothing else holds a reference to keep it alive.
+    _OPEN_WINDOWS.append(win)
+    panel.start()
+    return True
+
+
 def build_welcome_window(max_tiles: int) -> QtWidgets.QMainWindow:
     """The window the app starts in: no slide, just the menu that opens one.
 
@@ -204,20 +302,54 @@ def build_welcome_window(max_tiles: int) -> QtWidgets.QMainWindow:
     win = QtWidgets.QMainWindow()
     win.setWindowTitle("cytos")
     win.resize(760, 480)
-
-    label = QtWidgets.QLabel("No slide open\n\nFile ▸ Open Slide…")
-    label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-    label.setStyleSheet("QLabel { background: #141414; color: #9a9a9a; font-size: 15px; }")
-    win.setCentralWidget(label)
+    _place_window(win)
 
     def on_open():
         if prompt_open_slide(win, max_tiles):
             win.close()
 
+    def on_new():
+        if prompt_new_slide(win, max_tiles):
+            win.close()
+
+    # What the program is, and nothing else. The File menu is where you act;
+    # repeating it as buttons puts the same two commands on screen twice.
+    page = QtWidgets.QWidget()
+    page.setStyleSheet("QWidget { background: #141414; }")
+    page_layout = QtWidgets.QVBoxLayout(page)
+    page_layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+    page_layout.setSpacing(6)
+
+    title = QtWidgets.QLabel("cytos")
+    title.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+    title.setStyleSheet("color: #e8e8e8; font-size: 34px;")
+    page_layout.addWidget(title)
+
+    subtitle = QtWidgets.QLabel(f"A fast viewer for spatial biology slides — version {_version()}")
+    subtitle.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+    subtitle.setStyleSheet("color: #8a8a8a; font-size: 13px;")
+    page_layout.addWidget(subtitle)
+
+    page_layout.addSpacing(22)
+    # Where to go next, named but not spelled out: which source formats exist is
+    # the next dialog's business, not this screen's.
+    hint = QtWidgets.QLabel("File ▸ Open Slide…\nFile ▸ New Slide from…")
+    # Text left-aligned inside a block that is itself centred: centring each
+    # line separately staggers them, so the two "File"s wouldn't start at the
+    # same place.
+    hint.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
+    hint.setStyleSheet("color: #6f6f6f; font-size: 13px;")
+    page_layout.addWidget(hint, 0, QtCore.Qt.AlignmentFlag.AlignHCenter)
+    win.setCentralWidget(page)
+
     file_menu = win.menuBar().addMenu("File")
     open_action = file_menu.addAction("Open Slide…")
     open_action.setShortcut(QtGui.QKeySequence.StandardKey.Open)
     open_action.triggered.connect(on_open)
+    # The other half of "I have no slide": this window is exactly where someone
+    # who has only a Xenium folder ends up, and offering only Open makes it a
+    # dead end for them.
+    file_menu.addMenu("New Slide from").addAction("Xenium Output…").triggered.connect(on_new)
 
     win.show()
     global _WELCOME_WINDOW
@@ -237,11 +369,16 @@ def build_app_menu_bar(max_tiles: int) -> QtWidgets.QMenuBar:
     action = file_menu.addAction("Open Slide…")
     action.setShortcut(QtGui.QKeySequence.StandardKey.Open)
     action.triggered.connect(lambda: prompt_open_slide(None, max_tiles))
+    file_menu.addMenu("New Slide from").addAction("Xenium Output…").triggered.connect(
+        lambda: prompt_new_slide(None, max_tiles)
+    )
     _APP_MENU_BAR = bar
     return bar
 
 
-def build_window(slide_path: Path, max_tiles: int = 64, parent=None) -> _MainWindow | None:
+def build_window(
+    slide_path: Path, max_tiles: int = 64, parent=None, win: "_MainWindow | None" = None
+) -> _MainWindow | None:
     """Open one slide in its own window and return it, already shown. Returns
     None if the session picker was cancelled.
 
@@ -374,14 +511,34 @@ def build_window(slide_path: Path, max_tiles: int = 64, parent=None) -> _MainWin
         )
 
     QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
-    win = _MainWindow()
+    # `win` is passed in when the window already exists and was showing an
+    # import running into it -- the same window becomes the view, rather than
+    # one closing and another appearing. It is already on screen and already in
+    # _OPEN_WINDOWS, so neither is repeated below.
+    reused = win is not None
+    if win is None:
+        win = _MainWindow()
+        win.resize(1300, 950)
+        _place_window(win)
+    else:
+        # Grow out of the loading size now that there is a slide to show, and
+        # re-centre, since a window sized for a progress card is nowhere near
+        # where a viewer belongs.
+        win.resize(1300, 950)
+        _place_window(win)
+        # It already has the File menu it carried while importing, and the menus
+        # below are added, not replaced -- without this the window ends up with
+        # two File menus side by side. A fresh bar rather than clear(): clear()
+        # only removes the actions, leaving the old QMenus alive as hidden
+        # children of the bar, which then turn up in later findChildren scans
+        # and hand back stale wrappers once Python collects them.
+        win.setMenuBar(QtWidgets.QMenuBar(win))
     # The session is in the title because it's what tells two windows on the
     # same slide apart -- which region you're looking at, not a bare "(2)".
     win.setWindowTitle(f"cytos — {slide.name} · {session_name}")
     win.slide_root = slide.root
     win.session_name = session_name
     win.max_tiles = max_tiles
-    win.resize(1300, 950)
 
     render_widget = CanvasRenderWidget(parent=win)
     win.setCentralWidget(render_widget)
@@ -667,6 +824,9 @@ def build_window(slide_path: Path, max_tiles: int = 64, parent=None) -> _MainWin
     open_action = file_menu.addAction("Open Slide…")
     open_action.setShortcut(QtGui.QKeySequence.StandardKey.Open)
     open_action.triggered.connect(open_slide)
+    file_menu.addMenu("New Slide from").addAction("Xenium Output…").triggered.connect(
+        lambda: prompt_new_slide(win, max_tiles)
+    )
     # "Add", not "Open": the slide is already open, and this puts another
     # image on top of it rather than replacing anything. The dialog takes
     # several folders at once, so no "(s)" is needed in the label.
@@ -823,7 +983,8 @@ def build_window(slide_path: Path, max_tiles: int = 64, parent=None) -> _MainWin
 
     render_widget.request_draw(animate)
     win.show()
-    _OPEN_WINDOWS.append(win)
+    if not reused:
+        _OPEN_WINDOWS.append(win)
     print("window open — left-drag to pan, scroll to zoom, per-layer controls in the dock panel")
     return win
 
