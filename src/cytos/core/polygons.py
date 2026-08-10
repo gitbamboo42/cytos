@@ -19,7 +19,8 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 import zarr
 
-from cytos.core.slide import TILES_FORMAT, SegmentLayer
+from cytos.core.slide import SegmentLayer
+from cytos.core.store import open_tile_store
 from cytos.core.tiling import tile_world_size, visible_tile_keys
 
 
@@ -119,8 +120,7 @@ class PolygonTileGrid:
 def load_polygon_tile_grid(layer: SegmentLayer, world_bounds: tuple[float, float, float, float]) -> PolygonTileGrid:
     """Open the tile store a slide's segment layer points at. `world_bounds`
     is the slide's, not the layer's -- every layer shares one grid."""
-    if layer.format != TILES_FORMAT:
-        raise ValueError(f"{layer.path}: unsupported segment tile format {layer.format!r}")
+    store = open_tile_store(layer.path, layer.format, "segment")
 
     features = None
     features_path = layer.path / "features.parquet"
@@ -128,7 +128,7 @@ def load_polygon_tile_grid(layer: SegmentLayer, world_bounds: tuple[float, float
         features = pq.read_table(features_path)
 
     return PolygonTileGrid(
-        store=zarr.open_group(str(layer.path / "tiles.zarr"), mode="r"),
+        store=store,
         tile_depth=layer.tile_depth,
         world_bounds=world_bounds,
         n_cells=layer.n_cells,

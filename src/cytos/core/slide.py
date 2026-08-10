@@ -18,13 +18,19 @@ Layout::
 
     sample.cytos/
       cytos.json                    <- the manifest; readable with no zarr import
-      images/dapi.zarr/             <- OME-NGFF, still openable on its own
+      images/dapi.zarr.zip          <- OME-NGFF, still openable on its own
       segments/cell/
-        tiles.zarr/
+        tiles.zarr.zip
         features.parquet
       points/transcripts/
-        tiles.zarr/
+        tiles.zarr.zip
         genes.parquet
+
+Each zarr store is a single zipped file by default rather than a directory of
+chunk files -- a slide is written once and only ever read, so nothing needs
+in-place writes, and one file per layer survives being copied between machines
+in a way ~4000 loose files does not. `cytos.core.store` has the full reasoning;
+`cytos-import --no-zip` writes plain directories instead, and both forms open.
 
 World space is decided once, at import, and written here: every layer in a
 slide shares one `world_bounds` and one `tile_depth`, so all the vector layers
@@ -49,8 +55,14 @@ SLIDE_SUFFIX = ".cytos"
 
 # The zarr-backed tile layout `cytos.prep` writes today. Named in every vector
 # layer so a future packed/mmap layout can land one layer at a time.
+#
+# Same tiles either way -- the `-zip-` variants just say the store is a single
+# zipped file rather than a directory of chunk files (see `cytos.core.store`
+# for why that is the default). The tag is what lets both keep working.
 TILES_FORMAT = "zarr-tiles-v1"
+TILES_ZIP_FORMAT = "zarr-zip-tiles-v1"
 IMAGE_FORMAT = "ome-ngff-0.5"
+IMAGE_ZIP_FORMAT = "ome-ngff-0.5-zip"
 
 # Black->hue ramps registered by `cytos.render.image`, in the order channels get
 # assigned one when the importer isn't told otherwise. Lives here, not in

@@ -23,7 +23,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import zarr
 
-from cytos.core.slide import TILES_FORMAT, PointLayer
+from cytos.core.slide import PointLayer
+from cytos.core.store import open_tile_store
 from cytos.core.tiling import tile_world_size, visible_tile_keys
 
 # Xenium's own recommended quality cutoff: Phred-scaled, so 20 means a 1-in-100
@@ -140,8 +141,7 @@ class PointTileGrid:
 def load_point_tile_grid(layer: PointLayer, world_bounds: tuple[float, float, float, float]) -> PointTileGrid:
     """Open the tile store a slide's point layer points at. `world_bounds` is
     the slide's, not the layer's -- every layer shares one grid."""
-    if layer.format != TILES_FORMAT:
-        raise ValueError(f"{layer.path}: unsupported point tile format {layer.format!r}")
+    store = open_tile_store(layer.path, layer.format, "point")
 
     genes = None
     genes_path = layer.path / "genes.parquet"
@@ -149,7 +149,7 @@ def load_point_tile_grid(layer: PointLayer, world_bounds: tuple[float, float, fl
         genes = pq.read_table(genes_path)
 
     return PointTileGrid(
-        store=zarr.open_group(str(layer.path / "tiles.zarr"), mode="r"),
+        store=store,
         tile_depth=layer.tile_depth,
         world_bounds=world_bounds,
         n_points=layer.n_points,

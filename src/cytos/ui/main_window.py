@@ -158,11 +158,11 @@ class _MainWindow(QtWidgets.QMainWindow):
 
 
 def _default_channel_name(path: str) -> str:
-    """Folder name with the OME-Zarr suffix stripped, e.g. 'dapi.ome.zarr' ->
+    """Store name with the OME-Zarr suffix stripped, e.g. 'dapi.ome.zarr' ->
     'dapi' — used when a channel is opened via the file dialog instead of
     coming from the slide manifest."""
     name = Path(path).name
-    for suffix in (".ome.zarr", ".zarr"):
+    for suffix in (".ome.zarr.zip", ".zarr.zip", ".ome.zarr", ".zarr"):
         if name.endswith(suffix):
             return name[: -len(suffix)]
     return name

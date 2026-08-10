@@ -85,8 +85,8 @@ _ADDITIVE_ALPHA_CONFIG = {
 
 class TileCache:
     """LRU cache of GPU-resident image tiles, added to / removed from a pygfx
-    scene as the camera moves. Reads chunks lazily via dask — only what's
-    actually visible gets pulled off disk.
+    scene as the camera moves. Reads chunks lazily straight from the zarr
+    pyramid — only what's actually visible gets pulled off disk.
 
     `colormap`, if given (a name from `plotlet.list_colormaps()`), maps this
     channel's intensity through that colormap and blends it additively with

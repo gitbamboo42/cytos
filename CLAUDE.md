@@ -59,6 +59,12 @@ dataclasses, so `cytos.render` never sees a storage object. That last one, not
 the directory layout, is what keeps the tile format swappable. See
 `src/cytos/core/slide.py`.
 
+Each store in the leaves is **one zipped file** (`tiles.zarr.zip`) — a slide is
+written once and only ever read, and 6 files copy between machines in a way
+3,970 don't. Reads are as fast or faster. Directories still open; the `format`
+tag says which, and `cytos-import --no-zip` writes them. See
+`src/cytos/core/store.py`.
+
 `cytos.json` is written once by the importer and holds each layer's *defaults*;
 `session.json` (same folder, written on window close) holds only your overrides
 plus camera and window state. Two files, so View > Reset to Slide Defaults can

@@ -33,12 +33,15 @@ from cytos.core.slide import (
     CYTOS_FORMAT,
     DEFAULT_CHANNEL_COLORMAPS,
     IMAGE_FORMAT,
+    IMAGE_ZIP_FORMAT,
     TILES_FORMAT,
+    TILES_ZIP_FORMAT,
     write_manifest,
 )
 from cytos.core.image import load_pyramid_levels
 from cytos.core.points import DEFAULT_MIN_QV, load_transcripts
 from cytos.core.polygons import load_polygons, numeric_feature_names
+from cytos.prep.archive import zip_store
 from cytos.prep.points import prep_points
 from cytos.prep.polygons import prep_polygons
 from cytos.prep.pyramid import convert_ome_zarr
@@ -138,6 +141,7 @@ def import_slide(
     min_qv: float = DEFAULT_MIN_QV,
     genes_only: bool = True,
     images_override: list[tuple[str, str]] | None = None,
+    zip_stores: bool = True,
 ) -> Path:
     images, segments, points = _discover_xenium(source)
     if images_override:
@@ -197,38 +201,59 @@ def import_slide(
     layers = []
 
     for i, img in enumerate(images):
-        dest = out / "images" / f"{img.id}.zarr"
-        dest.parent.mkdir(parents=True, exist_ok=True)
+        image_dir = out / "images"
+        image_dir.mkdir(parents=True, exist_ok=True)
+        store_name = f"{img.id}.zarr.zip" if zip_stores else f"{img.id}.zarr"
+        dest = image_dir / store_name
+        staged = None
         if img.id in image_levels:
             # Real copy, not a link: a slide has to survive being moved to
-            # another machine on its own.
-            shutil.copytree(img.path, dest)
+            # another machine on its own. Zipping reads the source pyramid
+            # straight into the archive, so it is still written exactly once --
+            # no copy-then-pack of a whole-slide image.
+            if zip_stores:
+                zip_store(img.path, dest)
+            else:
+                shutil.copytree(img.path, dest)
         else:
-            convert_ome_zarr(img.path, dest, channel=img.channel, quiet=True)
-            image_levels[img.id] = load_pyramid_levels(dest)
+            # Converted as a directory first, because that is what the OME-Zarr
+            # writer produces. Packing it waits until after the clim below.
+            staged = image_dir / f"{img.id}.zarr"
+            convert_ome_zarr(img.path, staged, channel=img.channel, quiet=True)
+            image_levels[img.id] = load_pyramid_levels(staged)
 
         # Percentile autocontrast, decided here rather than at every open:
         # fluorescence channels are sparse and heavy-tailed, so raw min/max
         # crushes them to near-black (see CLAUDE.md).
         coarsest = np.asarray(image_levels[img.id][-1].data)
         clim = [float(v) for v in np.percentile(coarsest, [1, 99.5])]
+
+        # Only now, because these levels read from `staged`, and a zarr array
+        # whose chunk files have been deleted reads back as fill value -- all
+        # zeros, no error. Packing before the clim silently produced clim
+        # [0, 0] and a black image.
+        if staged is not None and zip_stores:
+            zip_store(staged, dest, remove_source=True)
         colormap = colormaps.get(img.id, DEFAULT_CHANNEL_COLORMAPS[i % len(DEFAULT_CHANNEL_COLORMAPS)])
         layers.append(
             {
                 "kind": "image",
                 "id": img.id,
-                "path": f"images/{img.id}.zarr",
-                "format": IMAGE_FORMAT,
+                "path": f"images/{store_name}",
+                "format": IMAGE_ZIP_FORMAT if zip_stores else IMAGE_FORMAT,
                 "colormap": colormap,
                 "clim": clim,
                 "visible": True,
             }
         )
-        print(f"  wrote images/{img.id}.zarr  colormap={colormap} clim={[round(v, 1) for v in clim]}")
+        print(f"  wrote images/{store_name}  colormap={colormap} clim={[round(v, 1) for v in clim]}")
 
     for seg in segments:
         polygons = loaded_polygons[seg.id]
-        stats = prep_polygons(polygons, out / "segments" / seg.id, world_bounds, tile_depth)
+        layer_dir = out / "segments" / seg.id
+        stats = prep_polygons(polygons, layer_dir, world_bounds, tile_depth)
+        if zip_stores:
+            zip_store(layer_dir / "tiles.zarr", remove_source=True)
         feature_names = numeric_feature_names(polygons.features)
         color_by = next(
             (n for n in _PREFERRED_COLOR_BY if n in feature_names),
@@ -239,7 +264,7 @@ def import_slide(
                 "kind": "segments",
                 "id": seg.id,
                 "path": f"segments/{seg.id}",
-                "format": TILES_FORMAT,
+                "format": TILES_ZIP_FORMAT if zip_stores else TILES_FORMAT,
                 "tile_depth": stats["tile_depth"],
                 "tiles": stats["tiles"],
                 "n_cells": stats["n_cells"],
@@ -258,13 +283,16 @@ def import_slide(
 
     for pts in points:
         transcripts = loaded_points[pts.id]
-        stats = prep_points(transcripts, out / "points" / pts.id, world_bounds, tile_depth)
+        layer_dir = out / "points" / pts.id
+        stats = prep_points(transcripts, layer_dir, world_bounds, tile_depth)
+        if zip_stores:
+            zip_store(layer_dir / "tiles.zarr", remove_source=True)
         layers.append(
             {
                 "kind": "points",
                 "id": pts.id,
                 "path": f"points/{pts.id}",
-                "format": TILES_FORMAT,
+                "format": TILES_ZIP_FORMAT if zip_stores else TILES_FORMAT,
                 "tile_depth": stats["tile_depth"],
                 "tiles": stats["tiles"],
                 "n_points": stats["n_points"],
@@ -329,6 +357,15 @@ def main() -> None:
         help="keep negative-control probes and unassigned codewords, which are dropped by default",
     )
     parser.add_argument(
+        "--no-zip",
+        action="store_true",
+        help=(
+            "write each zarr store as a directory of chunk files instead of one "
+            "zipped file — slower to copy between machines, but readable by "
+            "napari and other OME-NGFF tools"
+        ),
+    )
+    parser.add_argument(
         "--image",
         nargs=2,
         action="append",
@@ -346,6 +383,7 @@ def main() -> None:
             min_qv=args.min_qv,
             genes_only=not args.keep_controls,
             images_override=args.image,
+            zip_stores=not args.no_zip,
         )
     except (ValueError, KeyError, OSError) as err:
         # Pointing this at the wrong folder is an ordinary mistake, not a bug,

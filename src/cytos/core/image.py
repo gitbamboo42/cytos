@@ -12,14 +12,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-from ome_zarr.io import parse_url
-from ome_zarr.reader import Reader
+import zarr
+
+from cytos.core.store import open_zarr_group
 
 
 @dataclass
 class PyramidLevel:
     index: int
-    data: "dask.array.Array"  # noqa: F821
+    data: zarr.Array  # sliced lazily; only visible chunks are ever read
     shape: tuple[int, int]  # (H, W) px
     scale: tuple[float, float]  # (y, x) um/px
     translation: tuple[float, float]  # (y, x) um
@@ -52,23 +53,43 @@ class PyramidLevel:
 
 
 def load_pyramid_levels(path: Path) -> list[PyramidLevel]:
-    # parse_url returns None for anything that isn't a zarr store, and
-    # ome_zarr's Reader then asserts on it -- an AttributeError deep in a
-    # dependency, with no mention of the path that caused it. Anyone can point
-    # a file dialog at the wrong folder, so say what's actually wrong.
-    url = parse_url(str(path))
-    if url is None:
-        raise ValueError(f"{path}: not an OME-Zarr image — no zarr store there")
-    nodes = list(Reader(url)())
-    if not nodes:
+    """Read an OME-NGFF multiscale pyramid's levels from a store directory or
+    a zipped store (`cytos.core.store`).
+
+    Reads the `multiscales` metadata directly rather than going through
+    ome-zarr-py: all that's wanted from it is the per-level scale, translation
+    and array, every consumer here only ever does
+    `np.asarray(level.data[rows, cols])`, and a plain zarr array does that as
+    well as a dask one. Doing it here keeps `cytos.core` off both ome-zarr and
+    dask, and is what lets a zipped store open at all -- ome-zarr's
+    `parse_url` returns None for a zip.
+    """
+    path = Path(path)
+    # Anyone can point a file dialog at the wrong folder. Name the path in the
+    # message; the errors underneath don't.
+    if not path.exists():
+        raise ValueError(f"{path}: not an OME-Zarr image — nothing there")
+    try:
+        root = open_zarr_group(path)
+    except ValueError as err:  # zarr's GroupNotFoundError is a ValueError
+        raise ValueError(f"{path}: not an OME-Zarr image — no zarr store there") from err
+
+    attrs = dict(root.attrs)
+    # NGFF 0.5 (zarr v3) nests its metadata under "ome"; 0.4 (zarr v2) puts
+    # "multiscales" straight at the top level. Both are still in the wild.
+    multiscales = attrs.get("ome", attrs).get("multiscales")
+    if not multiscales:
         raise ValueError(f"{path}: a zarr store, but holds no OME-Zarr image")
-    node = nodes[0]
-    transforms = node.metadata["coordinateTransformations"]
+
     levels = []
-    for i, data in enumerate(node.data):
-        scale = next(t["scale"] for t in transforms[i] if t["type"] == "scale")
+    for i, dataset in enumerate(multiscales[0]["datasets"]):
+        data = root[dataset["path"]]
+        transforms = dataset.get("coordinateTransformations", [])
+        scale = next((t["scale"] for t in transforms if t["type"] == "scale"), None)
+        if scale is None:
+            raise ValueError(f"{path}: level {dataset['path']} has no scale transform")
         translation = next(
-            (t["translation"] for t in transforms[i] if t["type"] == "translation"),
+            (t["translation"] for t in transforms if t["type"] == "translation"),
             (0.0, 0.0),
         )
         levels.append(
@@ -78,7 +99,7 @@ def load_pyramid_levels(path: Path) -> list[PyramidLevel]:
                 shape=tuple(data.shape),
                 scale=tuple(scale),
                 translation=tuple(translation),
-                chunk_shape=tuple(data.chunksize),
+                chunk_shape=tuple(data.chunks),
             )
         )
     return levels
