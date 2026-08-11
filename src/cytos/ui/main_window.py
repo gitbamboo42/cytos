@@ -68,7 +68,7 @@ from cytos.ui.points_panel import PointsRow
 from cytos.ui.segment_panel import SegmentRow
 from cytos.ui.session_picker import choose_session
 from cytos.ui.canvas_input import CanvasRenderWidget
-from cytos.ui.import_window import ImportPanel
+from cytos.ui.import_window import AddSegmentsPanel, ImportPanel
 
 
 # Which fields of each layer kind a session may override. The manifest holds
@@ -466,9 +466,12 @@ def build_window(
         channels.append(ch)
         image_layers.append((layer, ch))
 
-    # (layer, grid, cache, numeric feature names) per segment layer in the slide.
+    # (layer, grid, cache, numeric feature names) per segment layer in the
+    # slide. File > Add Segments… appends to this list at runtime, so the
+    # per-layer build is a function rather than a loop body.
     segment_layers = []
-    for layer in slide.segments:
+
+    def build_segment_layer(layer):
         grid = load_polygon_tile_grid(layer, slide.world_bounds)
         feature_names = numeric_feature_names(grid.features)
         # The manifest's choice, unless the feature table can't back it.
@@ -486,9 +489,13 @@ def build_window(
         scene.add(cache.group)
         segment_layers.append((layer, grid, cache, feature_names))
         print(
-            f"segments '{layer.id}': {grid.n_cells} cells, {len(grid.tiles)} tiles, "
+            f"segments '{layer.id}': {grid.n_cells} objects, {len(grid.tiles)} tiles, "
             f"colormap={layer.colormap} color_by={color_by or 'flat'}"
         )
+        return grid, cache, feature_names
+
+    for layer in slide.segments:
+        build_segment_layer(layer)
 
     # (layer, grid, cache) per point layer.
     point_layers = []
@@ -613,39 +620,45 @@ def build_window(
     point_rows = []
     image_rows = []
 
-    if segment_layers:
-        def on_segments_section_visibility(section_visible: bool) -> None:
-            for layer, _grid, cache, _features in segment_layers:
-                cache.group.visible = section_visible and segment_visibility.get(layer.id, True)
+    # Connected whether or not the slide came with segments: File > Add
+    # Segments… can put one in a section that started out empty, and a handler
+    # wired only when the list was non-empty would leave that layer deaf to its
+    # own section's master switch.
+    def on_segments_section_visibility(section_visible: bool) -> None:
+        for layer, _grid, cache, _features in segment_layers:
+            cache.group.visible = section_visible and segment_visibility.get(layer.id, True)
 
-        segments_section.visibility_changed.connect(on_segments_section_visibility)
+    segments_section.visibility_changed.connect(on_segments_section_visibility)
 
-        for layer, _grid, cache, feature_names in segment_layers:
-            segment_row = SegmentRow(
-                layer.id.capitalize(),
-                feature_names,
-                cache.colormap,
-                cache.color_by,
-                cache.show_outline,
-                cache.show_fill,
-                cache.fill_opacity,
-                layer.visible,
-            )
-            segment_row.colormap_changed.connect(cache.set_colormap)
-            segment_row.color_by_changed.connect(cache.set_color_by)
-            segment_row.outline_changed.connect(cache.set_outline_visible)
-            segment_row.fill_changed.connect(cache.set_fill_visible)
-            segment_row.fill_opacity_changed.connect(cache.set_fill_opacity)
+    def add_segment_row(layer, cache, feature_names) -> SegmentRow:
+        segment_row = SegmentRow(
+            layer.id.capitalize(),
+            feature_names,
+            cache.colormap,
+            cache.color_by,
+            cache.show_outline,
+            cache.show_fill,
+            cache.fill_opacity,
+            layer.visible,
+        )
+        segment_row.colormap_changed.connect(cache.set_colormap)
+        segment_row.color_by_changed.connect(cache.set_color_by)
+        segment_row.outline_changed.connect(cache.set_outline_visible)
+        segment_row.fill_changed.connect(cache.set_fill_visible)
+        segment_row.fill_opacity_changed.connect(cache.set_fill_opacity)
 
-            def on_segment_visibility(visible, layer_id=layer.id, c=cache):
-                segment_visibility[layer_id] = visible
-                c.group.visible = visible and segments_section.is_checked()
+        def on_segment_visibility(visible, layer_id=layer.id, c=cache):
+            segment_visibility[layer_id] = visible
+            c.group.visible = visible and segments_section.is_checked()
 
-            segment_row.visibility_changed.connect(on_segment_visibility)
-            segments_section.add_widget(segment_row)
-            segment_rows.append((layer, feature_names, segment_row))
-    else:
-        segments_section.setEnabled(False)
+        segment_row.visibility_changed.connect(on_segment_visibility)
+        segments_section.add_widget(segment_row)
+        segment_rows.append((layer, feature_names, segment_row))
+        return segment_row
+
+    for layer, _grid, cache, feature_names in segment_layers:
+        add_segment_row(layer, cache, feature_names)
+    segments_section.setEnabled(bool(segment_layers))
 
     if point_layers:
         def on_points_section_visibility(section_visible: bool) -> None:
@@ -747,8 +760,15 @@ def build_window(
     stats_label.setWordWrap(False)
     stats_label.setFont(QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.SystemFont.FixedFont))
     stats_label.setFixedWidth(240)
-    # One row per layer, plus the resolution line, plus a row of slack.
-    stats_label.setMinimumHeight(20 * (len(channels) + len(segment_layers) + len(point_layers) + 1) + 20)
+    def resize_stats_label() -> None:
+        # One row per layer, plus the resolution line, plus a row of slack.
+        # Re-run when a layer is added, or the newest row is the one that
+        # doesn't fit.
+        stats_label.setMinimumHeight(
+            20 * (len(channels) + len(segment_layers) + len(point_layers) + 1) + 20
+        )
+
+    resize_stats_label()
     stats_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignLeft)
     dock_layout.addWidget(stats_label)
     dock_layout.addStretch()
@@ -792,6 +812,78 @@ def build_window(
                 "Could not add image",
                 "These folders aren't OME-Zarr images:\n\n" + "\n\n".join(failed),
             )
+
+    def adopt_new_segment_layers() -> None:
+        """Pick up whatever `cytos.prep.segments` just wrote into the slide.
+
+        The manifest is re-read rather than guessed at: the subprocess decides
+        the final layer id (it may have had to make it unique), and re-reading
+        is also what keeps the in-memory `slide` in step with the file, which
+        the session save and "Reset to Slide Defaults" both work from.
+        """
+        known = {layer.id for layer, *_ in segment_layers}
+        for layer in load_slide(slide.root).segments:
+            if layer.id in known:
+                continue
+            slide.segments.append(layer)
+            _grid, cache, feature_names = build_segment_layer(layer)
+            add_segment_row(layer, cache, feature_names)
+            defaults[f"segments:{layer.id}"] = _capture(layer, "segments")
+            segment_visibility[layer.id] = layer.visible
+            cache.group.visible = layer.visible and segments_section.is_checked()
+        segments_section.setEnabled(bool(segment_layers))
+        resize_stats_label()
+
+    def add_segments(paths: list[str]) -> None:
+        """Run one `cytos.prep.segments` per chosen file, each in a dialog of
+        its own. Sequential rather than parallel: they all write the same
+        manifest at the end, and two of them racing would leave one of the
+        layers written to disk but missing from it."""
+        for path in paths:
+            dialog = QtWidgets.QDialog(win)
+            dialog.setWindowTitle("Add Segments")
+            layout = QtWidgets.QVBoxLayout(dialog)
+            layout.setContentsMargins(0, 0, 0, 0)
+            panel = AddSegmentsPanel(slide.root, Path(path), parent=dialog)
+            layout.addWidget(panel)
+
+            def on_finished(ok: bool, d=dialog) -> None:
+                if ok:
+                    adopt_new_segment_layers()
+                    d.accept()
+                # On failure the dialog stays put with the log open -- its own
+                # Close button is what dismisses it.
+
+            panel.finished.connect(on_finished)
+            # Started from inside the dialog's own event loop, not before it:
+            # a command that failed instantly would otherwise call accept() on
+            # a dialog that hasn't been exec'd yet, and the exec() after it
+            # would then never return.
+            QtCore.QTimer.singleShot(0, panel.start)
+            dialog.exec()
+
+    def add_segments_from_file() -> None:
+        paths, _ = QtWidgets.QFileDialog.getOpenFileNames(
+            win,
+            "Add segmentation",
+            str(slide.root.parent),
+            "Segmentation (*.parquet *.zip);;All files (*)",
+        )
+        if paths:
+            add_segments(paths)
+
+    def add_segments_from_folder() -> None:
+        # A zarr store is a *folder*, so it needs the directory picker -- the
+        # same split (and the same multi-select workaround) as Add Image…,
+        # which has to deal with exactly one of these two shapes.
+        dialog = QtWidgets.QFileDialog(win, "Add segmentation (OME-Zarr label mask)")
+        dialog.setFileMode(QtWidgets.QFileDialog.FileMode.Directory)
+        dialog.setOption(QtWidgets.QFileDialog.Option.ShowDirsOnly, True)
+        dialog.setOption(QtWidgets.QFileDialog.Option.DontUseNativeDialog, True)
+        for view in dialog.findChildren(QtWidgets.QAbstractItemView):
+            view.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
+        if dialog.exec() and dialog.selectedFiles():
+            add_segments(dialog.selectedFiles())
 
     dock = QtWidgets.QDockWidget("Layers", win)
     # restoreState matches docks by objectName; without one the saved layout
@@ -840,6 +932,14 @@ def build_window(
     # several folders at once, so no "(s)" is needed in the label.
     add_action = file_menu.addAction("Add Image…")
     add_action.triggered.connect(add_images)
+    # Split by the *shape* of what you have rather than by its format: a
+    # boundary table and a zipped label mask are both files, an unzipped label
+    # mask is a folder, and one Qt file dialog cannot offer both. Which of the
+    # two formats it is gets worked out from the file itself
+    # (`cytos.prep.segments.segment_format`), so it is never asked here.
+    segments_menu = file_menu.addMenu("Add Segments")
+    segments_menu.addAction("From File…").triggered.connect(add_segments_from_file)
+    segments_menu.addAction("From Folder…").triggered.connect(add_segments_from_folder)
     file_menu.addSeparator()
     # Closing saves anyway; this is for saving a good view *before* carrying on
     # poking at it, which is the moment you actually want it captured.

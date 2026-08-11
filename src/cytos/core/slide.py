@@ -42,6 +42,7 @@ grids.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -235,4 +236,16 @@ def _check_layer_paths(slide: Slide, manifest_path: Path) -> None:
 
 
 def write_manifest(root: Path, manifest: dict) -> None:
-    (root / MANIFEST_NAME).write_text(json.dumps(manifest, indent=2) + "\n")
+    """Write `cytos.json`, replacing any existing one in a single step.
+
+    Via a temp file and `os.replace` rather than a plain write, because the
+    manifest is no longer only ever written once at import: `cytos.prep.
+    segments` appends a layer to a slide that may already be open in a viewer
+    (or two). A half-written manifest is a slide that no longer opens at all,
+    and `os.replace` is atomic on every platform this runs on, so a reader
+    sees either the old file or the new one.
+    """
+    path = root / MANIFEST_NAME
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(manifest, indent=2) + "\n")
+    os.replace(tmp, path)

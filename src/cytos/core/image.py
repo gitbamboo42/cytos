@@ -79,13 +79,21 @@ def load_pyramid_levels(path: Path) -> list[PyramidLevel]:
         root = open_zarr_group(path)
     except ValueError as err:  # zarr's GroupNotFoundError is a ValueError
         raise ValueError(f"{path}: not an OME-Zarr image — no zarr store there") from err
+    return pyramid_levels(root, str(path))
 
+
+def pyramid_levels(root: zarr.Group, label: str) -> list[PyramidLevel]:
+    """The levels of an already-open multiscale group. Split out from
+    `load_pyramid_levels` because an OME-NGFF label mask keeps its multiscale
+    one group down, under `labels/<name>` (see `cytos.prep.labels`), which no
+    path on its own can address inside a zipped store. `label` names the source
+    in error messages."""
     attrs = dict(root.attrs)
     # NGFF 0.5 (zarr v3) nests its metadata under "ome"; 0.4 (zarr v2) puts
     # "multiscales" straight at the top level. Both are still in the wild.
     multiscales = attrs.get("ome", attrs).get("multiscales")
     if not multiscales:
-        raise ValueError(f"{path}: a zarr store, but holds no OME-Zarr image")
+        raise ValueError(f"{label}: a zarr store, but holds no OME-Zarr image")
 
     levels = []
     for i, dataset in enumerate(multiscales[0]["datasets"]):
@@ -93,7 +101,7 @@ def load_pyramid_levels(path: Path) -> list[PyramidLevel]:
         transforms = dataset.get("coordinateTransformations", [])
         scale = next((t["scale"] for t in transforms if t["type"] == "scale"), None)
         if scale is None:
-            raise ValueError(f"{path}: level {dataset['path']} has no scale transform")
+            raise ValueError(f"{label}: level {dataset['path']} has no scale transform")
         translation = next(
             (t["translation"] for t in transforms if t["type"] == "translation"),
             (0.0, 0.0),

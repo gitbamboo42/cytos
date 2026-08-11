@@ -56,7 +56,7 @@ def load_transcripts(
     filter doesn't apply rather than an error.
 
     Coordinates are read straight through, matching
-    `cytos.core.polygons.load_polygons`: raw Xenium coordinates are row-major
+    `cytos.core.polygons.polygons_from_parquet`: raw Xenium coordinates are row-major
     (Y down) and so is cytos world space, so there is nothing to convert.
     """
     available = set(pq.ParquetFile(path).schema_arrow.names)

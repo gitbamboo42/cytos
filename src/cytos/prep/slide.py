@@ -40,19 +40,21 @@ from cytos.core.slide import (
 )
 from cytos.core.image import load_pyramid_levels
 from cytos.core.points import DEFAULT_MIN_QV, load_transcripts
-from cytos.core.polygons import load_polygons, numeric_feature_names
 from cytos.prep.archive import zip_store
+from cytos.prep.labels import DEFAULT_SIMPLIFY
 from cytos.prep.points import prep_points
-from cytos.prep.polygons import prep_polygons
 from cytos.prep.pyramid import convert_ome_zarr
+from cytos.prep.segments import (
+    SegmentSource,
+    check_fits_slide,
+    default_layer_id,
+    load_segments,
+    unique_layer_id,
+    write_segment_layer,
+)
 from cytos.prep.tiling import choose_tile_depth
 
 DEFAULT_TILE_SIZE = 500.0
-
-# Preferred default for a segment layer's "Color by": the most broadly
-# meaningful per-cell measurement present. Baked into the manifest at import so
-# the viewer doesn't have to re-guess every time it opens.
-_PREFERRED_COLOR_BY = ("cell_area", "nucleus_area", "transcript_counts", "total_counts")
 
 
 @dataclass
@@ -63,20 +65,12 @@ class _ImageSource:
 
 
 @dataclass
-class _SegmentSource:
-    id: str
-    boundaries: Path
-    cells: Path | None
-    visible: bool = True
-
-
-@dataclass
 class _PointSource:
     id: str
     transcripts: Path
 
 
-def _discover_xenium(source: Path) -> tuple[list[_ImageSource], list[_SegmentSource], list[_PointSource]]:
+def _discover_xenium(source: Path) -> tuple[list[_ImageSource], list[SegmentSource], list[_PointSource]]:
     """What a Xenium output directory offers. Prefers an OME-Zarr already
     sitting next to the raw data over re-deriving one from the OME-TIFF -- the
     pyramid is identical and converting a whole-slide morphology image again
@@ -98,16 +92,16 @@ def _discover_xenium(source: Path) -> tuple[list[_ImageSource], list[_SegmentSou
 
     cells = source / "cells.parquet"
     cells = cells if cells.exists() else None
-    segments: list[_SegmentSource] = []
+    segments: list[SegmentSource] = []
     if (source / "cell_boundaries.parquet").exists():
-        segments.append(_SegmentSource(id="cell", boundaries=source / "cell_boundaries.parquet", cells=cells))
+        segments.append(SegmentSource(id="cell", path=source / "cell_boundaries.parquet", cells=cells))
     if (source / "nucleus_boundaries.parquet").exists():
         # Off by default: nuclei sit inside the cell outlines already on
         # screen, so showing both at once reads as doubled lines rather than
         # as two layers. Present and one checkbox away.
         segments.append(
-            _SegmentSource(
-                id="nucleus", boundaries=source / "nucleus_boundaries.parquet", cells=cells, visible=False
+            SegmentSource(
+                id="nucleus", path=source / "nucleus_boundaries.parquet", cells=cells, visible=False
             )
         )
 
@@ -141,9 +135,17 @@ def import_slide(
     min_qv: float = DEFAULT_MIN_QV,
     genes_only: bool = True,
     images_override: list[tuple[str, str]] | None = None,
+    extra_segments: list[SegmentSource] | None = None,
     zip_stores: bool = True,
 ) -> Path:
     images, segments, points = _discover_xenium(source)
+    # Added to what the source offers, not swapped for it -- unlike
+    # `--image`, which replaces a channel set wholesale. A segmentation from
+    # another tool is a second opinion about the same cells, and the usual
+    # thing to want is both on screen, one checkbox apart.
+    for extra in extra_segments or []:
+        extra.id = unique_layer_id(extra.id, {seg.id for seg in segments})
+        segments.append(extra)
     if images_override:
         images = [_ImageSource(id=Path(p).name.split(".")[0], path=Path(p)) for p, _ in images_override]
         colormaps = {Path(p).name.split(".")[0]: c for p, c in images_override}
@@ -156,7 +158,7 @@ def import_slide(
     for img in images:
         print(f"  image    {img.id:12s} {img.path.name}")
     for seg in segments:
-        print(f"  segments {seg.id:12s} {seg.boundaries.name}")
+        print(f"  segments {seg.id:12s} {seg.path.name}")
     for pts in points:
         print(f"  points   {pts.id:12s} {pts.transcripts.name}")
 
@@ -170,12 +172,18 @@ def import_slide(
             image_levels[img.id] = levels
             world_bounds = _union(world_bounds, levels[0].world_bounds())
 
+    extra_ids = {seg.id for seg in (extra_segments or [])}
     loaded_polygons = {}
     for seg in segments:
-        polygons = load_polygons(seg.boundaries, seg.cells)
+        # Loaded (and, for a label mask, traced) once here rather than again in
+        # pass 2: the geometry is what the world bounds are decided from, and
+        # tracing a whole-slide mask twice would double the longest step in
+        # the whole import.
+        polygons = load_segments(seg)
         loaded_polygons[seg.id] = polygons
-        world_bounds = _union(world_bounds, _coords_bounds(polygons.coords))
-        print(f"  loaded {seg.id}: {len(polygons.offsets) - 1} cells")
+        if seg.id not in extra_ids:
+            world_bounds = _union(world_bounds, _coords_bounds(polygons.coords))
+        print(f"  loaded {seg.id}: {len(polygons.offsets) - 1} objects")
 
     loaded_points = {}
     for pts in points:
@@ -183,6 +191,18 @@ def import_slide(
         loaded_points[pts.id] = transcripts
         world_bounds = _union(world_bounds, _coords_bounds(transcripts.coords))
         print(f"  loaded {pts.id}: {len(transcripts.coords)} transcripts, {len(transcripts.gene_names)} genes")
+
+    # A `--segments` layer is checked against the extent the *source dataset*
+    # occupies, and only then allowed to widen it. Unioned blindly, a
+    # segmentation in some other coordinate space would simply make the world
+    # bigger and sit in a far corner of it -- a slide that imports cleanly and
+    # is wrong. Nothing to check against if the source brought no extent of its
+    # own, which is the "--segments is the whole slide" case.
+    for seg in segments:
+        if seg.id in extra_ids:
+            if world_bounds is not None:
+                check_fits_slide(loaded_polygons[seg.id], world_bounds, str(seg.path))
+            world_bounds = _union(world_bounds, _coords_bounds(loaded_polygons[seg.id].coords))
 
     if world_bounds is None:
         raise ValueError(f"{source}: no layer with a spatial extent -- cannot place a world grid")
@@ -249,36 +269,16 @@ def import_slide(
         print(f"  wrote images/{store_name}  colormap={colormap} clim={[round(v, 1) for v in clim]}")
 
     for seg in segments:
-        polygons = loaded_polygons[seg.id]
-        layer_dir = out / "segments" / seg.id
-        stats = prep_polygons(polygons, layer_dir, world_bounds, tile_depth)
-        if zip_stores:
-            zip_store(layer_dir / "tiles.zarr", remove_source=True)
-        feature_names = numeric_feature_names(polygons.features)
-        color_by = next(
-            (n for n in _PREFERRED_COLOR_BY if n in feature_names),
-            feature_names[0] if feature_names else None,
-        )
         layers.append(
-            {
-                "kind": "segments",
-                "id": seg.id,
-                "path": f"segments/{seg.id}",
-                "format": TILES_ZIP_FORMAT if zip_stores else TILES_FORMAT,
-                "tile_depth": stats["tile_depth"],
-                "tiles": stats["tiles"],
-                "n_cells": stats["n_cells"],
-                "colormap": "viridis",
-                "color_by": color_by,
-                "show_outline": True,
-                "show_fill": False,
-                "fill_opacity": 0.35,
-                "visible": seg.visible,
-            }
-        )
-        print(
-            f"  wrote segments/{seg.id}  {stats['n_cells']} cells, {stats['n_vertices']} vertices, "
-            f"{stats['n_triangles']} triangles, {len(stats['tiles'])} tiles, color_by={color_by or 'flat'}"
+            write_segment_layer(
+                loaded_polygons[seg.id],
+                out,
+                seg.id,
+                world_bounds,
+                tile_depth,
+                zip_stores=zip_stores,
+                visible=seg.visible,
+            )
         )
 
     for pts in points:
@@ -326,6 +326,11 @@ def import_slide(
                 "tile_size": tile_size,
                 "min_qv": min_qv,
                 "genes_only": genes_only,
+                # Segmentation from elsewhere is no longer a thing the source
+                # path implies, so record where each layer actually came from.
+                "extra_segments": [
+                    {"id": seg.id, "path": str(seg.path.resolve())} for seg in (extra_segments or [])
+                ],
             },
             "layers": layers,
         },
@@ -373,7 +378,54 @@ def main() -> None:
         default=None,
         help="repeatable; use these images instead of whatever the source offers",
     )
+    parser.add_argument(
+        "--segments",
+        nargs="+",
+        action="append",
+        metavar="PATH [NAME]",
+        default=None,
+        help=(
+            "repeatable; add a segmentation from a boundary parquet or an OME-Zarr "
+            "label mask, *alongside* whatever the source offers (unlike --image, "
+            "which replaces). NAME defaults to the file's own name"
+        ),
+    )
+    parser.add_argument(
+        "--segments-columns",
+        default=None,
+        metavar="ID,X,Y",
+        help="boundary-table column names for --segments, if they aren't detected (e.g. label,x,y)",
+    )
+    parser.add_argument(
+        "--segments-simplify",
+        type=float,
+        default=DEFAULT_SIMPLIFY,
+        help=(
+            f"label masks: Douglas-Peucker tolerance in pixels, spent on cutting the "
+            f"vertex count marching squares produces; default {DEFAULT_SIMPLIFY}"
+        ),
+    )
     args = parser.parse_args()
+
+    columns = tuple(args.segments_columns.split(",")) if args.segments_columns else None
+    if columns is not None and len(columns) != 3:
+        print("error: --segments-columns takes exactly three names, ID,X,Y", file=sys.stderr)
+        raise SystemExit(2)
+    extra_segments = []
+    for values in args.segments or []:
+        if len(values) > 2:
+            print(f"error: --segments takes a path and an optional name, got {len(values)} values", file=sys.stderr)
+            raise SystemExit(2)
+        path = Path(values[0])
+        extra_segments.append(
+            SegmentSource(
+                id=values[1] if len(values) == 2 else default_layer_id(path),
+                path=path,
+                columns=columns,
+                simplify=args.segments_simplify,
+            )
+        )
+
     try:
         import_slide(
             args.source,
@@ -383,6 +435,7 @@ def main() -> None:
             min_qv=args.min_qv,
             genes_only=not args.keep_controls,
             images_override=args.image,
+            extra_segments=extra_segments,
             zip_stores=not args.no_zip,
         )
     except (ValueError, KeyError, OSError) as err:

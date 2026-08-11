@@ -1,20 +1,23 @@
-"""The loading half of a slide window: what fills it while `cytos-import` is
-still building the slide it was opened for.
+"""Running one of cytos's own prep commands from inside the app, and showing
+what it is doing.
 
-A slide that doesn't exist yet still opens a window. It shows the import
-running, and when that finishes the same window becomes the viewer -- "a view
-that had to load first", rather than a progress dialog that vanishes and is
-replaced by something else. Closing the window is how you cancel.
+Two of them exist. `ImportPanel` builds a whole slide: a slide that doesn't
+exist yet still opens a window, that window shows the import running, and when
+it finishes the same window becomes the viewer -- "a view that had to load
+first", rather than a progress dialog that vanishes and is replaced by
+something else. `AddSegmentsPanel` adds one segmentation layer to a slide that
+is already open, and shows in a dialog over it.
 
-The import runs as a subprocess rather than in a thread. `cytos-import` already
-exists, already narrates every layer it writes, and is the documented way to
-build a slide; running it means no second code path to drift out of step, no
-CPU-heavy work sharing a process with a live render loop, and a cancel that is
-just killing a pid. It is invoked through `sys.executable` rather than the
-console-script name, so it does not depend on how the user's PATH is set up.
+Both run as a subprocess rather than a thread, which is the reason they share
+a base class here. The commands already exist, already narrate every layer they
+write, and are the documented way to do this work; running them means no second
+code path to drift out of step, no CPU-heavy work sharing a process with a live
+render loop, and a cancel that is just killing a pid. They are invoked through
+`sys.executable` rather than the console-script names, so nothing depends on
+how the user's PATH is set up.
 
 Imports nothing from `cytos.ui.main_window` on purpose: that module builds the
-menus that start an import, so the dependency has to run one way only.
+menus that start this work, so the dependency has to run one way only.
 """
 
 from __future__ import annotations
@@ -29,21 +32,29 @@ from PySide6 import QtCore, QtGui, QtWidgets
 _MAX_LOG_LINES = 5000
 
 
-class ImportPanel(QtWidgets.QWidget):
-    """Runs one `cytos-import` and shows its output.
+class SubprocessPanel(QtWidgets.QWidget):
+    """Runs one `python -m cytos.prep.…` and shows its output.
 
-    Emits `finished(True)` when the slide is built and ready to open, and
-    `finished(False)` on failure or cancellation -- in which case the panel
-    stays on screen with the log still readable, because a window that
-    disappears on failure leaves you with no idea what went wrong.
+    Emits `finished(True)` when the work is done, and `finished(False)` on
+    failure or cancellation -- in which case the panel stays on screen with the
+    log still readable, because something that disappears on failure leaves you
+    with no idea what went wrong.
+
+    Subclasses supply the command and the wording; everything below is the same
+    either way.
     """
 
     finished = QtCore.Signal(bool)
 
-    def __init__(self, source: Path, out: Path, parent=None):
+    # Wording, overridden per command.
+    failure_title = "Failed"
+    cancel_title = "Cancelled"
+    cancel_message = "Cancelled."
+    unexpected_message = "The command stopped unexpectedly."
+
+    def __init__(self, args: list[str], title: str, subtitle: str, parent=None):
         super().__init__(parent)
-        self.source = Path(source)
-        self.out = Path(out)
+        self.args = args
         self._cancelled = False
         self._done = False
         # The importer prints one "error: ..." line for the ordinary mistakes.
@@ -60,13 +71,13 @@ class ImportPanel(QtWidgets.QWidget):
         card_layout.setContentsMargins(18, 16, 18, 16)
         card_layout.setSpacing(8)
 
-        self.status = QtWidgets.QLabel(f"Building {self.out.stem}")
+        self.status = QtWidgets.QLabel(title)
         title_font = self.status.font()
         title_font.setPointSize(title_font.pointSize() + 5)
         self.status.setFont(title_font)
         card_layout.addWidget(self.status)
 
-        self.step = QtWidgets.QLabel(f"from {self.source.name}")
+        self.step = QtWidgets.QLabel(subtitle)
         self.step.setStyleSheet("color: #8a8a8a;")
         self.step.setWordWrap(True)
         card_layout.addWidget(self.step)
@@ -111,7 +122,7 @@ class ImportPanel(QtWidgets.QWidget):
     def start(self) -> None:
         # -u because Python block-buffers stdout when it isn't a terminal, and
         # a log that arrives in one lump at the end is not progress.
-        args = ["-u", "-m", "cytos.prep.slide", str(self.source), "--out", str(self.out)]
+        args = ["-u", *self.args]
         self._append(f"$ {Path(sys.executable).name} {' '.join(args)}\n")
         self.process.start(sys.executable, args)
         # Closing the window is the cancel gesture, and the window is not ours
@@ -161,9 +172,9 @@ class ImportPanel(QtWidgets.QWidget):
         self.adjust_window()
 
     def _on_action(self) -> None:
-        # One button, two jobs: it stops the import while one is running, and
-        # closes the window afterwards -- which is the only thing left to do
-        # once a failed import has been read.
+        # One button, two jobs: it stops the command while one is running,
+        # and closes the window afterwards -- which is the only thing left to
+        # do once a failure has been read.
         if self._done:
             self.window().close()
         else:
@@ -178,7 +189,7 @@ class ImportPanel(QtWidgets.QWidget):
         if not data:
             return
         self._append(data)
-        # The importer narrates itself a line at a time; the last thing it said
+        # The command narrates itself a line at a time; the last thing it said
         # is the best available answer to "what is it doing now".
         for line in reversed(data.splitlines()):
             if line.strip():
@@ -189,20 +200,24 @@ class ImportPanel(QtWidgets.QWidget):
                 self._last_error = line[len("error: ") :]
 
     def _on_error(self, error) -> None:
-        # Covers the import never starting at all -- a wrong interpreter, say --
-        # which produces no output and would otherwise look like a hang.
+        # Covers the command never starting at all -- a wrong interpreter, say
+        # -- which produces no output and would otherwise look like a hang.
         if error == QtCore.QProcess.ProcessError.FailedToStart:
-            self._settle(False, f"Could not start the importer: {self.process.errorString()}")
+            self._settle(False, f"Could not start it: {self.process.errorString()}")
 
     def _on_finished(self, exit_code: int, exit_status) -> None:
         if self._cancelled:
-            self._settle(False, "Cancelled. The partly-written folder is not a slide and won't open.")
+            self._settle(False, self.cancel_message)
         elif exit_status != QtCore.QProcess.ExitStatus.NormalExit:
-            self._settle(False, self._last_error or "The importer stopped unexpectedly.")
+            self._settle(False, self._last_error or self.unexpected_message)
         elif exit_code != 0:
-            self._settle(False, self._last_error or f"The importer exited with code {exit_code}.")
+            self._settle(False, self._last_error or f"It exited with code {exit_code}.")
         else:
-            self._settle(True, f"Imported {self.out.name}.")
+            self._settle(True, "")
+
+    def _success_wording(self) -> tuple[str, str]:
+        """(status, step) shown when the command succeeds."""
+        return "Done", ""
 
     def _settle(self, ok: bool, message: str) -> None:
         if self._done:
@@ -212,12 +227,66 @@ class ImportPanel(QtWidgets.QWidget):
         self.bar.setValue(1)
         self.bar.setVisible(not ok)
         if ok:
-            self.status.setText(f"Built {self.out.stem}")
-            self.step.setText("Opening…")
+            status, step = self._success_wording()
+            self.status.setText(status)
+            self.step.setText(step)
         else:
-            self.status.setText("Import cancelled" if self._cancelled else "Import failed")
+            self.status.setText(self.cancel_title if self._cancelled else self.failure_title)
             self.step.setText(message)
             self.action_button.setText("Close")
             # Failures are the case the log exists for, so stop making them ask.
             self.details_button.setChecked(True)
         self.finished.emit(ok)
+
+
+class ImportPanel(SubprocessPanel):
+    """Builds a whole slide with `cytos-import`, into the window that will
+    become its viewer."""
+
+    failure_title = "Import failed"
+    cancel_title = "Import cancelled"
+    cancel_message = "Cancelled. The partly-written folder is not a slide and won't open."
+    unexpected_message = "The importer stopped unexpectedly."
+
+    def __init__(self, source: Path, out: Path, parent=None):
+        # Locals first: PySide6 objects to their attributes being set before
+        # the base class's __init__ has run.
+        source, out = Path(source), Path(out)
+        super().__init__(
+            ["-m", "cytos.prep.slide", str(source), "--out", str(out)],
+            f"Building {out.stem}",
+            f"from {source.name}",
+            parent,
+        )
+        self.source = source
+        self.out = out
+
+    def _success_wording(self) -> tuple[str, str]:
+        return f"Built {self.out.stem}", "Opening…"
+
+
+class AddSegmentsPanel(SubprocessPanel):
+    """Adds one segmentation layer to a slide that is already open.
+
+    Unlike an import this writes *into* an existing slide, so the cancel
+    wording says what that leaves behind: the manifest is written last and in
+    one step (see `cytos.core.slide.write_manifest`), so a killed run cannot
+    leave a slide that half-knows about a layer -- only some files under
+    `segments/` that nothing refers to.
+    """
+
+    failure_title = "Could not add segments"
+    cancel_title = "Cancelled"
+    cancel_message = "Cancelled. The slide still opens exactly as it did before."
+    unexpected_message = "It stopped unexpectedly."
+
+    def __init__(self, slide_root: Path, source: Path, name: str | None = None, parent=None):
+        source = Path(source)
+        args = ["-m", "cytos.prep.segments", str(slide_root), str(source)]
+        if name:
+            args += ["--name", name]
+        super().__init__(args, f"Adding {name or source.name}", f"to {Path(slide_root).name}", parent)
+        self.source = source
+
+    def _success_wording(self) -> tuple[str, str]:
+        return f"Added {self.source.name}", ""

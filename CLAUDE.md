@@ -24,10 +24,11 @@ no GPU/UI imports), `prep/` (offline preprocessing), `render/` (pygfx scene
 construction), `ui/` (Qt widgets only) — one-directional, each layer
 importable without the ones "above" it.
 
-`tools/make_synthetic_big_pyramid.py` stays outside the package, deliberately:
-dev-only stress-test generator, no end user needs it. Package vs. not is
-about what ships, not who runs it — `cytos-viewer`/`cytos-convert-ome-zarr`
-are the real product despite living in `src/`.
+`tools/make_synthetic_big_pyramid.py` and `tools/make_label_mask.py` stay
+outside the package, deliberately: dev-only generators, no end user needs
+them. Package vs. not is about what ships, not who runs it —
+`cytos-viewer`/`cytos-convert-ome-zarr` are the real product despite living in
+`src/`.
 
 `data/` and `work-notes/` are both fully gitignored — see `.gitignore` and
 each folder's own contents for what's there.
@@ -40,9 +41,18 @@ each folder's own contents for what's there.
   an Arrow `features` table for per-cell attributes.
 
 **Naming convention:** name loaders/converters after what they produce
-(`load_polygons`, `load_ome_zarr_image`, `polygons_from_parquet`), never after
-the source platform (`load_xenium`) — Xenium is the first data source, not the
-only one.
+(`polygons_from_parquet`, `polygons_from_labels`, `load_ome_zarr_image`), never
+after the source platform (`load_xenium`) — Xenium is the first data source, not
+the only one.
+
+A polygon set has **two input formats, and nothing downstream knows which one a
+layer came from**: a long-format boundary table (`polygons_from_parquet`, one
+row per vertex — Xenium and most exports), or an OME-Zarr **label mask** whose
+pixel values are object ids (`cytos.prep.labels.polygons_from_labels` — what
+Cellpose, StarDist and friends produce). Both land as the same `Polygons`, and
+`cytos.prep.segments` is the dispatcher that picks between them by looking at
+the file. Nothing about a polygon set assumes the objects are cells, or that
+they nest, or that one layer's objects relate to another's.
 
 ## The `.cytos` slide — the viewer's only entry point
 
@@ -65,10 +75,24 @@ written once and only ever read, and 6 files copy between machines in a way
 tag says which, and `cytos-import --no-zip` writes them. See
 `src/cytos/core/store.py`.
 
-`cytos.json` is written once by the importer and holds each layer's *defaults*;
-`session.json` (same folder, written on window close) holds only your overrides
-plus camera and window state. Two files, so View > Reset to Slide Defaults can
-just drop the session and re-read the manifest. See `src/cytos/core/session.py`.
+`cytos.json` holds each layer's *defaults*; `session.json` (same folder, written
+on window close) holds only your overrides plus camera and window state. Two
+files, so View > Reset to Slide Defaults can just drop the session and re-read
+the manifest. See `src/cytos/core/session.py`.
+
+The importer writes the manifest, but it is no longer the only thing that does:
+`cytos.prep.segments.add_segments_to_slide` appends a segmentation layer to a
+slide that already exists (File ▸ Add Segments… in the viewer, or
+`python -m cytos.prep.segments <slide> <source>`). Two consequences that are
+load-bearing. `write_manifest` writes via a temp file and `os.replace`, because
+a slide can be open in a viewer — or two — while a layer is being added to it,
+and a half-written `cytos.json` is a slide that no longer opens at all. And an
+added layer must reuse the slide's **existing** `world_bounds` and `tile_depth`
+rather than deriving its own; `cytos.prep.tiling.sort_and_tile` silently
+*clips* out-of-bounds anchors into the edge of the grid, so unregistered
+segmentation would otherwise import without complaint and draw as a smear along
+one side. `check_bounds_fit_slide` is what refuses that, and it runs before the
+expensive tracing step, not after it.
 
 ## Implementation gotchas (verified against a real slide)
 
@@ -76,6 +100,32 @@ Input-data format facts (parquet layout, Xenium zarr schema, OME-TIFF vs.
 zarr) live in `data/README.md`, not here — these are code-level pitfalls hit
 while building the tool, not facts about the input data itself.
 
+- **`ome_zarr.writer.write_image` cannot write a label mask.** It ignores the
+  `coordinate_transformations` passed to it (writing unit scale and zero
+  translation instead), and it builds a downsampled pyramid whatever `scaler`
+  says — which for a label image *interpolates between object ids*, inventing
+  objects nobody segmented. Both failures are silent; the first shows up as
+  traced polygons landing in pixel coordinates, ~22x too big and in the wrong
+  place. `tools/make_label_mask.py` writes the NGFF metadata by hand instead,
+  which is all of ~20 lines because `cytos.core.image.pyramid_levels` only
+  reads `multiscales[0].datasets[].coordinateTransformations`.
+- **Tracing a label mask is per-object Python, so it has to be read in
+  blocks.** The obvious loop — for each object, slice its bounding box out of
+  the zarr — re-decompresses the same chunks hundreds of thousands of times.
+  `cytos.prep.labels` instead reads 2048 px blocks once each and traces every
+  object that falls inside one, leaving only the few that straddle a block
+  edge to a read of their own. Measured on 167,780 objects over a 10964x15060
+  mask: **85 s, 515 MB peak** — well under the raster itself (660 MB), which
+  is the point of never holding the whole mask.
+- **Marching-squares rings need simplifying, and land half a pixel out.**
+  `find_contours` emits about one vertex per pixel step, so a 30 px cell
+  arrives with ~120 vertices where Xenium ships ~25 — vertex count is what the
+  tile store, the GPU buffers and the earcut loop all scale with. Douglas-Peucker
+  at 0.75 px is a default, not a polish step. The ring also sits on the outer
+  pixel boundary, so a round trip (rasterize a segmentation, trace it back)
+  returns areas ~2% larger; area centroids agree to 0.05 um, a quarter of a
+  pixel, with no directional bias — that round trip is the check to re-run if
+  the pixel→world conversion is ever touched.
 - `mapbox_earcut`'s nanobind binding requires **C-contiguous** `(*, 2)
   float32` arrays — `pandas.DataFrame.to_numpy()` on multiple columns returns
   Fortran-order, which fails with an unhelpful generic `TypeError`. Fix:

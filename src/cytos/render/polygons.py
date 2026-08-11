@@ -62,7 +62,7 @@ DEFAULT_COLORMAP = "viridis"
 def feature_colors(values: np.ndarray, colormap: str) -> np.ndarray:
     """(n, 4) float32 RGBA: each cell's feature value mapped through `colormap`
     over its own robust range. Cells with no value (nulls from the left-join in
-    `cytos.core.polygons.load_polygons`) land at the bottom of the ramp rather
+    `cytos.core.polygons.polygons_from_parquet`) land at the bottom of the ramp rather
     than dropping out of the LUT entirely."""
     lut = colormap_lut_array(colormap)  # (256, 4)
     v = np.asarray(values, dtype=np.float64)
@@ -140,7 +140,7 @@ class PolygonTileCache:
 
     def set_colors(self, colors: np.ndarray) -> None:
         """colors: (n_cells, 4) float32 RGBA in [0, 1], indexed by the same
-        dense cell id as `cytos.core.polygons.load_polygons`'s `features`
+        dense cell id as `cytos.core.polygons.polygons_from_parquet`'s `features`
         rows / `cytos.prep.polygons`'s `vertex_cell_id` -- the single
         recolor-by-feature operation, independent of how many tiles/vertices
         that touches on screen."""

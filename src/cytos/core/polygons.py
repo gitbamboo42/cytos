@@ -6,6 +6,14 @@ Raw vertex coordinates are already in the same world space as
 cytos.core.image's PyramidLevel (world Y increasing downward, matching pixel
 rows), so loading is a straight column read with no reprojection -- Xenium's
 row-major Y and cytos world Y agree.
+
+`polygons_from_parquet` reads *any* long-format boundary table, not just
+Xenium's: column names are detected from a list of common spellings and can be
+given outright, rows need not arrive grouped by object, and a ring that repeats
+its first vertex at the end is closed back up. Segmentation from another tool
+is the ordinary case, not the exception -- see `cytos.prep.labels` for the
+other input format (an OME-Zarr label mask), and `cytos.prep.segments` for the
+dispatcher that picks between them.
 """
 
 from __future__ import annotations
@@ -32,35 +40,129 @@ class Polygons:
     features: pa.Table  # per-cell attributes, row i matches cell_id[i]; always has "id"
 
 
-def load_polygons(boundaries_path: Path, cells_path: Path | None = None) -> Polygons:
-    """Load a Xenium `*_boundaries.parquet` (long format: one row per vertex,
-    consecutive rows already grouped by cell -- verified against both the
-    kidney and breast-cancer datasets) into the ragged-array model.
+# Tried in order, so a Xenium file's `cell_id` wins over the `label_id` column
+# sitting right next to it. Everything here is a spelling seen in the wild for
+# "which object does this vertex belong to" / "where is it".
+_ID_ALIASES = ("cell_id", "object_id", "label_id", "label", "id")
+_X_ALIASES = ("vertex_x", "x", "X")
+_Y_ALIASES = ("vertex_y", "y", "Y")
+
+
+def _pick_column(available: set[str], aliases: tuple[str, ...], what: str, path: Path) -> str:
+    for name in aliases:
+        if name in available:
+            return name
+    raise ValueError(
+        f"{path}: no {what} column -- looked for {', '.join(aliases)}, found {', '.join(sorted(available))}. "
+        f"Name the columns explicitly if they are spelled differently."
+    )
+
+
+def _run_starts(ids: np.ndarray) -> np.ndarray:
+    run_start = np.empty(len(ids), dtype=bool)
+    run_start[0] = True
+    run_start[1:] = ids[1:] != ids[:-1]
+    return np.flatnonzero(run_start)
+
+
+def _ring_areas(coords: np.ndarray, offsets: np.ndarray) -> np.ndarray:
+    """Shoelace area per ring, in world units squared. Absolute, because world
+    Y runs downward and would otherwise make every ring negative."""
+    n = len(offsets) - 1
+    starts, ends = offsets[:-1], offsets[1:]
+    # "Next vertex within the same ring", wrapping each ring's last back to its
+    # own first -- the same trick the outline renderer uses.
+    next_idx = np.arange(len(coords)) + 1
+    next_idx[ends - 1] = starts
+    x, y = coords[:, 0].astype(np.float64), coords[:, 1].astype(np.float64)
+    cross = x * y[next_idx] - x[next_idx] * y
+    return np.abs(np.add.reduceat(cross, starts)) / 2.0 if n else np.empty(0, np.float64)
+
+
+def polygons_from_parquet(
+    path: Path,
+    cells_path: Path | None = None,
+    columns: tuple[str, str, str] | None = None,
+) -> Polygons:
+    """Load a long-format boundary table (one row per vertex) into the
+    ragged-array model. Xenium's `*_boundaries.parquet` is the shape this was
+    written for, but nothing here is specific to it.
+
+    `columns` names the (id, x, y) columns outright; without it they are
+    detected from the spellings above. Rows do not have to arrive grouped by
+    object -- an interleaved file is stable-sorted by id first, since grouping
+    by *runs* of equal ids would otherwise cut one object into several polygons
+    with no error to show for it. A ring that repeats its first vertex as its
+    last has that duplicate dropped: earcut and the outline's ring-wrap both
+    assume an open ring, and a repeat gives a zero-length edge and a degenerate
+    triangle.
 
     If `cells_path` is given (e.g. `cells.parquet`), its per-cell attributes
     are left-joined onto `features` by the dataset's original cell id
     (string or int, whichever the slide uses), restoring row order to match
-    `cell_id`/`offsets` afterward since Arrow joins don't preserve it.
+    `cell_id`/`offsets` afterward since Arrow joins don't preserve it. Without
+    it, `features` carries the id plus a shoelace `area`, so a foreign
+    segmentation still has something for "Color by" to spread a ramp over.
     """
-    table = pq.read_table(boundaries_path, columns=["cell_id", "vertex_x", "vertex_y"])
-    ids = table.column("cell_id").to_numpy(zero_copy_only=False)
+    available = set(pq.ParquetFile(path).schema_arrow.names)
+    if columns is not None:
+        id_col, x_col, y_col = columns
+        missing = [c for c in columns if c not in available]
+        if missing:
+            raise ValueError(
+                f"{path}: no column(s) {', '.join(missing)} -- found {', '.join(sorted(available))}"
+            )
+    else:
+        id_col = _pick_column(available, _ID_ALIASES, "object id", path)
+        x_col = _pick_column(available, _X_ALIASES, "vertex x", path)
+        y_col = _pick_column(available, _Y_ALIASES, "vertex y", path)
 
-    run_start = np.empty(len(ids), dtype=bool)
-    run_start[0] = True
-    run_start[1:] = ids[1:] != ids[:-1]
-    starts = np.flatnonzero(run_start)
+    table = pq.read_table(path, columns=[id_col, x_col, y_col])
+    if table.num_rows == 0:
+        raise ValueError(f"{path}: no vertices in it")
+    ids = table.column(id_col).to_numpy(zero_copy_only=False)
+
+    starts = _run_starts(ids)
+    # Checked over the run-start ids only (one per run, not one per vertex), so
+    # the common already-grouped file pays for a unique over N values, not M.
+    if len(np.unique(ids[starts])) < len(starts):
+        # Arrow's sort is stable, so vertices keep their within-object order.
+        order = pc.sort_indices(table, sort_keys=[(id_col, "ascending")])
+        table = table.take(order)
+        ids = table.column(id_col).to_numpy(zero_copy_only=False)
+        starts = _run_starts(ids)
+
     original_ids = pa.array(ids[starts])
-    offsets = np.append(starts, len(ids)).astype(np.uint32)
+    offsets = np.append(starts, len(ids)).astype(np.int64)
 
     coords = np.empty((len(ids), 2), dtype=np.float32)
-    coords[:, 0] = table.column("vertex_x").to_numpy()
-    coords[:, 1] = table.column("vertex_y").to_numpy()
-    coords = np.ascontiguousarray(coords)
+    coords[:, 0] = table.column(x_col).to_numpy(zero_copy_only=False)
+    coords[:, 1] = table.column(y_col).to_numpy(zero_copy_only=False)
 
+    # Closed rings -> open rings. Guarded on >= 4 vertices so a degenerate
+    # 3-row "ring" that happens to start and end at the same point isn't
+    # reduced to something that can't be triangulated at all.
+    first, last = offsets[:-1], offsets[1:] - 1
+    closed = (
+        (coords[first, 0] == coords[last, 0])
+        & (coords[first, 1] == coords[last, 1])
+        & ((offsets[1:] - offsets[:-1]) >= 4)
+    )
+    if closed.any():
+        keep = np.ones(len(ids), dtype=bool)
+        keep[last[closed]] = False
+        coords = coords[keep]
+        counts = (offsets[1:] - offsets[:-1]) - closed.astype(np.int64)
+        offsets = np.concatenate([[0], np.cumsum(counts)]).astype(np.int64)
+
+    coords = np.ascontiguousarray(coords)
     cell_id = np.arange(len(original_ids), dtype=np.uint32)
-    features = pa.table({"id": original_ids})
+    features = pa.table({"id": original_ids, "area": _ring_areas(coords, offsets)})
+    offsets = offsets.astype(np.uint32)
 
     if cells_path is not None:
+        # The dataset's own per-cell table says more than a shoelace does.
+        features = features.drop_columns(["area"])
         cells = pq.read_table(cells_path)
         cells = cells.rename_columns(["id" if c == "cell_id" else c for c in cells.column_names])
         # cells.parquet's id column can differ in Arrow subtype from the
@@ -163,6 +265,6 @@ def visible_polygon_tile_keys(
 ) -> list[tuple[int, int]]:
     """world_rect = (minx, miny, maxx, maxy), world Y increasing downward --
     same convention as `cytos.core.image.visible_chunk_keys`, but polygon
-    coords are already in world space (see `load_polygons`), so unlike that
+    coords are already in world space (see `polygons_from_parquet`), so unlike that
     function this needs no pixel-row conversion at all."""
     return visible_tile_keys(grid.tiles, grid.tile_depth, grid.world_bounds, world_rect)

@@ -20,6 +20,12 @@ dependencies = [
     "plotlet>=0.6.4",
     "pyarrow",
     "mapbox_earcut",
+    # Label-mask segmentation import (cytos.prep.labels): marching-squares
+    # contours and Douglas-Peucker simplification from scikit-image, per-object
+    # bounding boxes from scipy. Both already arrive with ome-zarr, but this is
+    # the first code here that imports them directly.
+    "scikit-image",
+    "scipy",
 ]
 
 [project.scripts]

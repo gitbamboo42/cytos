@@ -9,7 +9,7 @@ structure: a curve of `order` bits per axis visits every order-L quadrant as
 one contiguous run, so grouping cells by their top (order-L) grid bits after
 sorting by Hilbert index gives quadtree tiles for free, each already a
 contiguous slice of the sorted arrays (verified in work-notes -- see
-`Polygons`/`load_polygons` in cytos.core.polygons for the loader this
+`Polygons`/`polygons_from_parquet` in cytos.core.polygons for the loader this
 extends).
 
 Not a command of its own: `cytos-import` (`cytos.prep.slide`) drives this,
