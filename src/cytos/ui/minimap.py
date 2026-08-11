@@ -103,10 +103,10 @@ class MinimapWidget(QtWidgets.QWidget):
             span_x = (wmaxx - wminx) or 1
             px0 = image_rect.x() + (vminx - wminx) / span_x * image_rect.width()
             px1 = image_rect.x() + (vmaxx - wminx) / span_x * image_rect.width()
-            # World Y increases upward but pixel Y increases downward, so the
-            # rect's *larger* world Y (vmaxy) maps to the *smaller* pixel Y.
-            py0 = self._world_y_to_pixel_y(vmaxy, image_rect)
-            py1 = self._world_y_to_pixel_y(vminy, image_rect)
+            # World Y and Qt's pixel Y both increase downward, so this is the
+            # same straight mapping as X.
+            py0 = self._world_y_to_pixel_y(vminy, image_rect)
+            py1 = self._world_y_to_pixel_y(vmaxy, image_rect)
             painter.setPen(QtGui.QPen(QtGui.QColor(255, 255, 0), 2))
             painter.drawRect(QtCore.QRectF(px0, py0, px1 - px0, py1 - py0))
         painter.end()
@@ -114,13 +114,13 @@ class MinimapWidget(QtWidgets.QWidget):
     def _world_y_to_pixel_y(self, world_y: float, image_rect: QtCore.QRectF) -> float:
         _, wminy, _, wmaxy = self._world_bounds
         span_y = (wmaxy - wminy) or 1
-        return image_rect.y() + (wmaxy - world_y) / span_y * image_rect.height()
+        return image_rect.y() + (world_y - wminy) / span_y * image_rect.height()
 
     def _pixel_y_to_world_y(self, pixel_y: float, image_rect: QtCore.QRectF) -> float:
         _, wminy, _, wmaxy = self._world_bounds
         span_y = (wmaxy - wminy) or 1
         fy = min(max((pixel_y - image_rect.y()) / image_rect.height(), 0.0), 1.0)
-        return wmaxy - fy * span_y
+        return wminy + fy * span_y
 
     def _widget_pos_to_world(self, pos: QtCore.QPointF) -> tuple[float, float] | None:
         image_rect = self._image_rect()

@@ -548,6 +548,14 @@ def build_window(
     units_label = unit_abbrev(slide.world_units)
     renderer = gfx.WgpuRenderer(render_widget)
     camera = gfx.OrthographicCamera()
+    # The one place world space is flipped for display. World Y increases
+    # downward (see `PyramidLevel.world_bounds`) but pygfx renders +y upward,
+    # so the camera is mirrored in Y instead of every loader negating its data.
+    # Safe on both counts that matter: `camera.width`/`height` stay positive, so
+    # `effective_camera_view_size` is unaffected, and PanZoomController derives
+    # its pan basis by unprojecting through the camera, so drag directions
+    # follow the mirror without any change to the controller.
+    camera.local.scale_y = -1
 
     def fit_camera_to_slide() -> None:
         camera.show_rect(minx, maxx, miny, maxy)

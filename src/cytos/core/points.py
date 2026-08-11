@@ -55,8 +55,9 @@ def load_transcripts(
     versions don't ship `is_gene`/`qv`, and a missing column just means that
     filter doesn't apply rather than an error.
 
-    Y is negated on the way in, matching `cytos.core.polygons.load_polygons`:
-    raw Xenium coordinates are row-major (Y down), cytos world space is Y up.
+    Coordinates are read straight through, matching
+    `cytos.core.polygons.load_polygons`: raw Xenium coordinates are row-major
+    (Y down) and so is cytos world space, so there is nothing to convert.
     """
     available = set(pq.ParquetFile(path).schema_arrow.names)
     wanted = ["feature_name", "x_location", "y_location"]
@@ -84,7 +85,7 @@ def load_transcripts(
 
     coords = np.empty((len(table), 2), dtype=np.float32)
     coords[:, 0] = table.column("x_location").to_numpy(zero_copy_only=False)
-    coords[:, 1] = -table.column("y_location").to_numpy(zero_copy_only=False)
+    coords[:, 1] = table.column("y_location").to_numpy(zero_copy_only=False)
     coords = np.ascontiguousarray(coords)
 
     return Transcripts(
@@ -162,5 +163,5 @@ def visible_point_tile_keys(
     grid: PointTileGrid, world_rect: tuple[float, float, float, float]
 ) -> list[tuple[int, int]]:
     """(tile_row, tile_col) for every cached tile the camera rect touches --
-    world_rect = (minx, miny, maxx, maxy), world Y increasing upward."""
+    world_rect = (minx, miny, maxx, maxy), world Y increasing downward."""
     return visible_tile_keys(grid.tiles, grid.tile_depth, grid.world_bounds, world_rect)

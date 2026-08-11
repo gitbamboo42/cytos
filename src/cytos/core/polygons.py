@@ -2,10 +2,10 @@
 per-cell attributes. Pure numpy/pyarrow -- no pygfx/GPU dependency, see
 cytos.render for that (work-notes/plan.md Phase 1).
 
-Reprojects raw vertex coordinates into the same world space as
-cytos.core.image's PyramidLevel (world Y increasing upward) at load time, so
-everything downstream works in world space only -- see CLAUDE.md's note that
-raw Xenium boundary/cell Y stays row-major (world_y = -raw_y).
+Raw vertex coordinates are already in the same world space as
+cytos.core.image's PyramidLevel (world Y increasing downward, matching pixel
+rows), so loading is a straight column read with no reprojection -- Xenium's
+row-major Y and cytos world Y agree.
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ def load_polygons(boundaries_path: Path, cells_path: Path | None = None) -> Poly
 
     coords = np.empty((len(ids), 2), dtype=np.float32)
     coords[:, 0] = table.column("vertex_x").to_numpy()
-    coords[:, 1] = -table.column("vertex_y").to_numpy()
+    coords[:, 1] = table.column("vertex_y").to_numpy()
     coords = np.ascontiguousarray(coords)
 
     cell_id = np.arange(len(original_ids), dtype=np.uint32)
@@ -161,8 +161,8 @@ def numeric_feature_names(features: pa.Table | None) -> list[str]:
 def visible_polygon_tile_keys(
     grid: PolygonTileGrid, world_rect: tuple[float, float, float, float]
 ) -> list[tuple[int, int]]:
-    """world_rect = (minx, miny, maxx, maxy), world Y increasing upward --
+    """world_rect = (minx, miny, maxx, maxy), world Y increasing downward --
     same convention as `cytos.core.image.visible_chunk_keys`, but polygon
     coords are already in world space (see `load_polygons`), so unlike that
-    function this needs no row/pixel flip."""
+    function this needs no pixel-row conversion at all."""
     return visible_tile_keys(grid.tiles, grid.tile_depth, grid.world_bounds, world_rect)

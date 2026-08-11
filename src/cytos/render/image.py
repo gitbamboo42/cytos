@@ -141,10 +141,11 @@ class TileCache:
         image = gfx.Image(gfx.Geometry(grid=texture), material)
         _, sx = level.scale
         _, tx = level.translation
-        # Negative Y scale: local row 0 (top of chunk) anchors at its world_y,
-        # and increasing local row must *decrease* world_y (world Y increases
-        # upward; pixel rows increase downward) — see PyramidLevel.world_bounds.
-        image.local.scale = (sx, -level.scale[0], 1)
+        # Plain positive scale: world Y and pixel rows run the same way, so
+        # local row 0 anchors at its world_y and increasing local row increases
+        # world_y — see PyramidLevel.world_bounds. The one flip that puts row 0
+        # at the top of the screen is on the camera, not here.
+        image.local.scale = (sx, level.scale[0], 1)
         image.local.position = (tx + x0 * sx, level.row_to_world_y(y0), 0)
         return image
 

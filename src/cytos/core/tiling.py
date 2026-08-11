@@ -14,9 +14,10 @@ has to happen on every camera move. Probing zarr for it measured ~8 ms per move
 on the 167K-cell slide -- about half a 60fps frame budget -- against 0.004 ms
 from the index. It also keeps this module free of any storage-format import.
 
-Tiles are indexed with world Y increasing upward, the same convention as
-`cytos.core.image`'s pyramid levels, so no row flip is needed anywhere on this
-path (see CLAUDE.md).
+Tiles are indexed with world Y increasing downward, the same convention as
+`cytos.core.image`'s pyramid levels, so row 0 is the *top* row of tiles -- the
+same direction as Xenium's own grid and as XYZ map tiles, and no flip is needed
+anywhere on this path (see CLAUDE.md).
 """
 
 from __future__ import annotations

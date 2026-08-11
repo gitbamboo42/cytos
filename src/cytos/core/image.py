@@ -29,27 +29,33 @@ class PyramidLevel:
     def world_bounds(self) -> tuple[float, float, float, float]:
         """(minx, miny, maxx, maxy) in world (um) space.
 
-        World Y increases upward (standard Cartesian / pygfx-camera
-        convention), matching how the data actually gets displayed (row 0 at
-        the top of the screen). Pixel rows increase downward, so row->world_y
-        is a flip: see `row_to_world_y` / `world_y_to_row`.
+        World Y increases *downward*, the same direction as the pixel rows it
+        comes from -- and the same convention as napari, QuPath, Xenium's own
+        coordinates, and XYZ map tiles. So row->world_y is a plain scale and
+        offset with no flip anywhere on the data path, and world bounds come
+        out positive.
+
+        pygfx renders +y upward, so exactly one flip is still needed to put
+        row 0 at the top of the screen. It lives on the camera
+        (`camera.local.scale_y = -1`, see `cytos.ui.main_window`) -- one place,
+        in the view, where a display convention belongs.
         """
         h, w = self.shape
         sy, sx = self.scale
         ty, tx = self.translation
         minx, maxx = tx, tx + w * sx
-        miny, maxy = self.row_to_world_y(h), self.row_to_world_y(0)
+        miny, maxy = self.row_to_world_y(0), self.row_to_world_y(h)
         return minx, miny, maxx, maxy
 
     def row_to_world_y(self, row: float) -> float:
         ty, _ = self.translation
         sy, _ = self.scale
-        return -(ty + row * sy)
+        return ty + row * sy
 
     def world_y_to_row(self, world_y: float) -> float:
         ty, _ = self.translation
         sy, _ = self.scale
-        return (-world_y - ty) / sy
+        return (world_y - ty) / sy
 
 
 def load_pyramid_levels(path: Path) -> list[PyramidLevel]:
@@ -119,7 +125,7 @@ def select_level(levels: list[PyramidLevel], world_per_px: float) -> int:
 
 
 def visible_chunk_keys(level: PyramidLevel, world_rect: tuple[float, float, float, float]) -> list[tuple[int, int]]:
-    """world_rect = (minx, miny, maxx, maxy), world Y increasing upward.
+    """world_rect = (minx, miny, maxx, maxy), world Y increasing downward.
     Returns (chunk_row, chunk_col) keys."""
     minx, miny, maxx, maxy = world_rect
     h, w = level.shape
@@ -129,9 +135,9 @@ def visible_chunk_keys(level: PyramidLevel, world_rect: tuple[float, float, floa
 
     px0 = max(0, int((minx - tx) / sx))
     px1 = min(w, int(np.ceil((maxx - tx) / sx)))
-    # World Y is flipped relative to pixel rows: larger world_y -> smaller row.
-    row_lo = level.world_y_to_row(maxy)
-    row_hi = level.world_y_to_row(miny)
+    # World Y runs the same way as pixel rows, so miny is the smaller row.
+    row_lo = level.world_y_to_row(miny)
+    row_hi = level.world_y_to_row(maxy)
     py0 = max(0, int(row_lo))
     py1 = min(h, int(np.ceil(row_hi)))
     if px0 >= px1 or py0 >= py1:

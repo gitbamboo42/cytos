@@ -84,13 +84,19 @@ while building the tool, not facts about the input data itself.
   distribution** (DAPI test channel: median 0, 99th pct 30, max 1194). Raw
   min/max `clim` crushes the image to near-black. Use percentile-based
   autocontrast (1st/99.5th pct), matching napari/Fiji.
-- **World Y increases upward** (standard Cartesian/camera convention), fixed
-  at the pixel↔world boundary in `PyramidLevel.row_to_world_y`/
-  `world_y_to_row` (`src/cytos/core/image.py`) rather than left in raw
-  row-major (downward) convention — needed so the pygfx view and the Qt
-  minimap agree on orientation. **Consequence:** this does not match raw
-  Xenium polygon Y (`cell_boundaries.parquet`, `cells.parquet`), which stays
-  row-major — overlaying polygons will need `world_y = -raw_y`.
+- **World Y increases downward**, the same direction as pixel rows, as raw
+  Xenium coordinates, and as every neighbouring tool (napari, QuPath, Fiji,
+  XYZ map tiles). So nothing on the data path converts Y: image levels are a
+  plain scale-and-offset (`PyramidLevel.row_to_world_y`), and polygon/point
+  loaders read `vertex_y`/`y_location` straight through. World bounds are
+  positive, and **tile row 0 is the top row** (`src/cytos/core/tiling.py`).
+  pygfx renders +y upward, so exactly one flip is still needed and it lives on
+  the camera — `camera.local.scale_y = -1` in `src/cytos/ui/main_window.py`.
+  Put display conventions in the view, not in the data. Two things make that
+  flip safe, and both were checked: `camera.width`/`height` stay positive (so
+  the note below still applies unchanged), and `PanZoomController` derives its
+  pan basis by unprojecting through the camera, so drag directions follow the
+  mirror with no change to the controller.
 - **`camera.width`/`camera.height` don't reflect what's actually visible on
   screen** when the viewport aspect differs from the camera's —
   `OrthographicCamera(maintain_aspect=True)` pads internally without updating
