@@ -2,12 +2,13 @@
 manifest says which layers exist, how they're colored, and what world space
 they share (see `cytos.core.slide`; `cytos-import` builds one).
 
-There is exactly one way in: File > Open Slide…. The app starts as an empty
-window offering that menu, rather than taking a path on the command line, so a
-slide can never arrive by a route that skips what that dialog does.
-Reassembling a dataset from loose paths, the way this used to work, meant
-telling the viewer every time what the data already knew — and left each layer
-free to sit on its own world grid.
+Two ways in, one code path: File > Open Slide…, or an `open` command on the
+control socket (`cytos-ctl` — see cytos.remote.ipc and _dispatch below). Both call
+build_window, so a slide can never arrive by a route that skips what opening
+does; the app starts as an empty window offering the menu rather than taking
+a path on the command line. Reassembling a dataset from loose paths, the way
+this used to work, meant telling the viewer every time what the data already
+knew — and left each layer free to sit on its own world grid.
 
 One process, too: a slide's session is owned by a single window at a time, and
 that can only be enforced among windows this process can see. Launching again
@@ -38,22 +39,24 @@ Usage (installed as a console script, see pyproject.toml [project.scripts]):
 from __future__ import annotations
 
 import argparse
+import itertools
 import sys
 from importlib import metadata
 from pathlib import Path
 
 import numpy as np
 import pygfx as gfx
-from PySide6 import QtCore, QtGui, QtNetwork, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 # Imported for its side effect: selects the Qt backend for rendercanvas, which
 # `cytos.ui.canvas_input`'s render widget is built on. The loop object itself
 # is unused -- see main() for why this app runs Qt's loop directly.
 import rendercanvas.qt  # noqa: F401
 
+from cytos.remote import ipc
 from cytos.core.slide import SLIDE_SUFFIX, load_slide
 from cytos.core.image import load_pyramid_levels, select_level
-from cytos.core.session import load_session, save_session
+from cytos.core.session import DEFAULT_SESSION_NAME, load_session, save_session
 from cytos.core.points import load_point_tile_grid
 from cytos.core.polygons import load_polygon_tile_grid, numeric_feature_names
 from cytos.render.camera import effective_camera_view_size
@@ -68,6 +71,7 @@ from cytos.ui.points_panel import PointsRow
 from cytos.ui.segment_panel import SegmentRow
 from cytos.ui.session_picker import choose_session
 from cytos.ui.canvas_input import CanvasRenderWidget
+from cytos.ui.controller import WindowController
 from cytos.ui.import_window import AddSegmentsPanel, ImportPanel
 
 
@@ -103,6 +107,8 @@ def _restore(layer, kind: str, state: dict) -> None:
 # a menu handler whose locals then go out of scope.
 _OPEN_WINDOWS: list["_MainWindow"] = []
 
+_WINDOW_IDS = itertools.count(1)
+
 # Width of the layer panel's contents — see where it is applied for why it is
 # pinned rather than merely a minimum.
 _DOCK_WIDTH = 340
@@ -136,6 +142,12 @@ class _MainWindow(QtWidgets.QMainWindow):
         # the same one -- see cytos.ui.session_picker.
         self.session_name = None
         self.max_tiles = 64
+        # How the control socket names this window ("window": 2). Never
+        # reused within a run, unlike a position in _OPEN_WINDOWS.
+        self.window_id = next(_WINDOW_IDS)
+        # A WindowController once the window shows a slide; None while it is
+        # still a welcome/import shell (see build_window).
+        self.controller = None
 
     def closeEvent(self, event):  # noqa: N802 - Qt's own naming
         if self.save_now is not None:
@@ -377,10 +389,19 @@ def build_app_menu_bar(max_tiles: int) -> QtWidgets.QMenuBar:
 
 
 def build_window(
-    slide_path: Path, max_tiles: int = 64, parent=None, win: "_MainWindow | None" = None
+    slide_path: Path,
+    max_tiles: int = 64,
+    parent=None,
+    win: "_MainWindow | None" = None,
+    session_name: str | None = None,
 ) -> _MainWindow | None:
     """Open one slide in its own window and return it, already shown. Returns
     None if the session picker was cancelled.
+
+    `session_name` names the session directly and skips the picker dialog —
+    that's how the control socket opens a slide without anyone at the screen
+    to answer a modal. A name another window already owns raises rather than
+    opening, the same rule the picker enforces by greying names out.
 
     Every window is fully independent — own scene, camera, tile caches, dock,
     and its own session — so opening a second slide, or a second view of the
@@ -405,10 +426,15 @@ def build_window(
     in_use = {
         w.session_name for w in _OPEN_WINDOWS if w.slide_root == slide.root and w.session_name
     }
-    session_name = choose_session(slide.root, slide.name, in_use, parent)
     if session_name is None:
-        print(f"slide '{slide.name}': no session chosen, not opening")
-        return None
+        session_name = choose_session(slide.root, slide.name, in_use, parent)
+        if session_name is None:
+            print(f"slide '{slide.name}': no session chosen, not opening")
+            return None
+    elif session_name in in_use:
+        raise ValueError(
+            f"session '{session_name}' of '{slide.name}' is already open in another window"
+        )
 
     # The manifest's values are the defaults; the session overrides them.
     # Snapshot the defaults *before* overriding, so "reset" has something real
@@ -458,6 +484,11 @@ def build_window(
         print(f"channel '{name}': {path} colormap={colormap} clim={tuple(round(float(v), 1) for v in clim)}")
         return Channel(name=name, colormap=colormap, levels=levels, cache=cache)
 
+    # Per-layer facts worth telling a remote caller (counts, feature names)
+    # that the dock rows themselves don't hold — see WindowController.describe.
+    # Populated at each layer-build site so layers added at runtime stay in.
+    layer_meta: dict[str, dict] = {}
+
     # (layer, channel) per image in the slide — File > Open adds channels to
     # `channels` that have no slide layer behind them, so they aren't here.
     image_layers = []
@@ -465,6 +496,7 @@ def build_window(
         ch = build_channel(layer.path, layer.colormap, layer.id, layer.clim)
         channels.append(ch)
         image_layers.append((layer, ch))
+        layer_meta[f"image:{layer.id}"] = {"path": str(layer.path)}
 
     # (layer, grid, cache, numeric feature names) per segment layer in the
     # slide. File > Add Segments… appends to this list at runtime, so the
@@ -488,6 +520,7 @@ def build_window(
         cache.group.visible = layer.visible
         scene.add(cache.group)
         segment_layers.append((layer, grid, cache, feature_names))
+        layer_meta[f"segments:{layer.id}"] = {"n_objects": int(grid.n_cells)}
         print(
             f"segments '{layer.id}': {grid.n_cells} objects, {len(grid.tiles)} tiles, "
             f"colormap={layer.colormap} color_by={color_by or 'flat'}"
@@ -512,6 +545,7 @@ def build_window(
         cache.group.visible = layer.visible
         scene.add(cache.group)
         point_layers.append((layer, grid, cache))
+        layer_meta[f"points:{layer.id}"] = {"n_points": int(grid.n_points)}
         print(
             f"points '{layer.id}': {grid.n_points} transcripts, {len(grid.gene_names)} genes, "
             f"{len(grid.tiles)} tiles, color={layer.color_mode}"
@@ -687,7 +721,7 @@ def build_window(
             points_row.opacity_changed.connect(cache.set_opacity)
             points_row.visible_genes_changed.connect(cache.set_visible_genes)
             points_section.add_widget(points_row)
-            point_rows.append((layer, points_row))
+            point_rows.append((layer, grid.gene_names, points_row))
             if saved_genes is not None:
                 # The row was *built* with the saved selection, so it never
                 # emitted -- push it through once so the LUT agrees with it.
@@ -956,7 +990,7 @@ def build_window(
             layers_state[f"image:{layer.id}"] = row.state()
         for layer, _features, row in segment_rows:
             layers_state[f"segments:{layer.id}"] = row.state()
-        for layer, row in point_rows:
+        for layer, _genes, row in point_rows:
             layers_state[f"points:{layer.id}"] = row.state()
         return {
             "camera": {
@@ -991,7 +1025,7 @@ def build_window(
             row.apply(
                 layer.colormap, color_by, layer.show_outline, layer.show_fill, layer.fill_opacity, layer.visible
             )
-        for layer, row in point_rows:
+        for layer, _genes, row in point_rows:
             # Genes have no manifest default -- "all of them" is the default.
             row.apply(layer.color_mode, layer.palette, layer.colormap, layer.size, layer.opacity, None)
         images_section.apply(True, True)
@@ -1034,7 +1068,10 @@ def build_window(
     latest_world_rect = [(minx, miny, maxx, maxy)]
     latest_world_per_px = [None]
 
-    def animate():
+    def update_scene():
+        """Everything a frame needs short of drawing it: camera math, tile
+        cache updates (which load synchronously), stats. Split from animate()
+        so render_offscreen below can produce a complete, current frame."""
         logical_w, logical_h = render_widget.get_logical_size()
         cx, cy = float(camera.local.position[0]), float(camera.local.position[1])
         eff_w, eff_h = effective_camera_view_size(camera.width, camera.height, logical_w, logical_h)
@@ -1067,13 +1104,25 @@ def build_window(
 
         latest_stats_text[0] = "\n".join(lines)
 
+    def animate():
+        update_scene()
         renderer.render(scene, camera)
         render_widget.request_draw()
 
+    def render_offscreen():
+        """A fresh frame of the current state, straight into the renderer's
+        internal buffer for `renderer.snapshot()` — without the canvas.
+        Snapshots must reflect the command that just ran, and the canvas
+        can't promise that: Qt doesn't repaint a hidden or fully occluded
+        window, and macOS throttles ones nobody can see. flush=False skips
+        only the blit-to-canvas step, so nothing here needs a paint event."""
+        update_scene()
+        renderer.render(scene, camera, flush=False)
+
     # Throttled to a fixed low rate, not the (uncapped) render loop — updating
-    # Qt widgets every render frame caused visible layout thrash before
-    # (see CLAUDE.md); painting the minimap rect is cheap but still no reason
-    # to redo it hundreds of times a second.
+    # Qt widgets every render frame caused visible layout thrash before (see
+    # skills/developers.md); painting the minimap rect is cheap but
+    # still no reason to redo it hundreds of times a second.
     def tick():
         stats_label.setText(latest_stats_text[0])
         minimap.set_view_rect(latest_world_rect[0])
@@ -1089,6 +1138,32 @@ def build_window(
     stats_timer.timeout.connect(tick)
     stats_timer.start(100)
 
+    # Everything the control socket can do to this window — built from the
+    # same closures and row lists the menus use, so a remote command and a
+    # mouse click are the same code path (see cytos.ui.controller).
+    win.controller = WindowController(
+        win=win,
+        slide=slide,
+        session_name=session_name,
+        camera=camera,
+        renderer=renderer,
+        render_widget=render_widget,
+        collect_session=collect_session,
+        reset_to_defaults=reset_to_defaults,
+        fit_camera_to_slide=fit_camera_to_slide,
+        render_offscreen=render_offscreen,
+        save_now=save_now,
+        image_rows=image_rows,
+        segment_rows=segment_rows,
+        point_rows=point_rows,
+        sections={
+            "images": images_section,
+            "segments": segments_section,
+            "points": points_section,
+        },
+        layer_meta=layer_meta,
+    )
+
     render_widget.request_draw(animate)
     win.show()
     if not reused:
@@ -1101,8 +1176,15 @@ def build_window(
 # (see cytos.core.session), and that rule can only be enforced against windows
 # this process can see -- a second process would happily open a session the
 # first one already has.
-_IPC_NAME = "cytos-viewer"
-_ipc_server = None  # module-level: a QLocalServer that goes out of scope stops listening
+#
+# The same socket is the app's whole remote-control surface: `cytos-ctl` (or
+# anything that writes a line of JSON -- see cytos.remote.ipc) sends commands
+# here, and _dispatch below is the complete list of them.
+_ipc_server = None  # module-level: a server that goes out of scope stops listening
+
+# What `open` over the socket passes to build_window; set from the command
+# line in main(), since no window need exist yet to read it from.
+_MAX_TILES = 64
 
 
 def _raise_all_windows() -> None:
@@ -1117,29 +1199,114 @@ def _raise_all_windows() -> None:
             win.activateWindow()
 
 
+def _controllers() -> list[WindowController]:
+    # Windows still importing a slide have no controller yet; they can't be
+    # driven, so they aren't listed.
+    return [w.controller for w in _OPEN_WINDOWS if w.controller is not None]
+
+
+def _find_controller(payload: dict) -> WindowController:
+    controllers = _controllers()
+    window_id = payload.get("window")
+    if window_id is None:
+        if len(controllers) == 1:
+            return controllers[0]
+        if not controllers:
+            raise ipc.CommandError("no slide window is open — use 'open' first")
+        listing = "; ".join(f"{c.win.window_id}: {c.win.windowTitle()}" for c in controllers)
+        raise ipc.CommandError(f'several windows are open — add "window": <id>. Open: {listing}')
+    for controller in controllers:
+        if controller.win.window_id == int(window_id):
+            return controller
+    raise ipc.CommandError(f"no window with id {window_id}")
+
+
+def _remote_open(payload: dict) -> dict:
+    path = payload.get("path")
+    if not path:
+        raise ipc.CommandError("open needs a 'path' to a .cytos slide")
+    session_name = payload.get("session") or DEFAULT_SESSION_NAME
+    try:
+        win = build_window(Path(path).expanduser(), _MAX_TILES, session_name=session_name)
+    except (ValueError, KeyError, OSError) as err:
+        raise ipc.CommandError(str(err)) from err
+    # Mirrors the welcome window's own Open handler: once a slide is up, the
+    # welcome screen has done its job.
+    if _WELCOME_WINDOW is not None and _WELCOME_WINDOW.isVisible():
+        _WELCOME_WINDOW.close()
+    return win.controller.describe()
+
+
+def _quit_app() -> None:
+    # Slide windows first -- each saves its session on close, and the last
+    # one closing builds a fresh welcome window (see _MainWindow.closeEvent),
+    # which is why the welcome window is closed after them, then quit() for
+    # good measure.
+    for win in list(_OPEN_WINDOWS):
+        win.close()
+    if _WELCOME_WINDOW is not None:
+        _WELCOME_WINDOW.close()
+    QtWidgets.QApplication.instance().quit()
+
+
+def _dispatch(payload: dict):
+    """Every command the control socket understands. Raising
+    `ipc.CommandError` reports the message to the caller; anything else is a
+    bug and comes back as its exception type (see cytos.remote.ipc.RemoteServer)."""
+    cmd = payload.get("cmd")
+    if cmd == "ping":
+        return {"app": "cytos", "version": _version(), "windows": len(_controllers())}
+    if cmd == "raise":
+        _raise_all_windows()
+        return {"raised": True}
+    if cmd == "windows":
+        return [c.summary() for c in _controllers()]
+    if cmd == "open":
+        return _remote_open(payload)
+    if cmd == "quit":
+        # Reply first, quit after: the delay lets this response reach the
+        # socket before the loop everything runs on goes away.
+        QtCore.QTimer.singleShot(100, _quit_app)
+        return {"quitting": True}
+
+    controller = _find_controller(payload)
+    if cmd == "describe":
+        return controller.describe()
+    if cmd == "state":
+        return controller.state()
+    if cmd == "set":
+        return controller.apply_state(payload.get("changes") or {})
+    if cmd == "snapshot":
+        path = payload.get("path")
+        if not path:
+            raise ipc.CommandError("snapshot needs a 'path' to write the PNG to")
+        return controller.snapshot(path)
+    if cmd == "reset":
+        return controller.reset()
+    if cmd == "save":
+        return controller.save()
+    raise ipc.CommandError(
+        f"unknown command '{cmd}' — one of: ping, raise, windows, open, quit, "
+        "describe, state, set, snapshot, reset, save"
+    )
+
+
 def _claim_single_instance() -> bool:
     """True if this process is the app. False means one is already running --
     it's been asked to come to the front, and this process should exit."""
     global _ipc_server
-
-    probe = QtNetwork.QLocalSocket()
-    probe.connectToServer(_IPC_NAME)
-    if probe.waitForConnected(300):
-        probe.write(b"raise")
-        probe.waitForBytesWritten(300)
-        probe.disconnectFromServer()
+    try:
+        ipc.request({"cmd": "raise"}, timeout_ms=1000)
         return False
-
-    # Nothing answered. Either no instance is running, or one crashed and left
-    # its socket file behind -- removeServer clears a stale one so listen()
-    # can bind. Safe precisely because the probe above just failed.
-    QtNetwork.QLocalServer.removeServer(_IPC_NAME)
-    _ipc_server = QtNetwork.QLocalServer()
-    if not _ipc_server.listen(_IPC_NAME):
-        # Losing the race to bind isn't fatal: it only means the "raise the
-        # running app" handshake won't work, not that this window can't run.
-        print(f"note: could not listen on {_IPC_NAME} ({_ipc_server.errorString()})")
-    _ipc_server.newConnection.connect(lambda: _raise_all_windows())
+    except ipc.NotRunning:
+        pass
+    except (TimeoutError, ValueError):
+        # Something is listening but not answering the protocol -- most
+        # likely an older cytos, which raises its windows on any connection
+        # and never replies. Either way an instance exists; don't start a
+        # second one over it.
+        return False
+    _ipc_server = ipc.RemoteServer(_dispatch)
     return True
 
 
@@ -1172,9 +1339,11 @@ def _shutdown_gpu() -> None:
 
 
 def main() -> None:
+    global _MAX_TILES
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--max-tiles", type=int, default=64, help="GPU tile cache size, per layer")
     args = parser.parse_args()
+    _MAX_TILES = args.max_tiles
 
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
     if not _claim_single_instance():

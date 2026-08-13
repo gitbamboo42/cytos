@@ -2,7 +2,7 @@
 multiscale pyramid.
 
 Xenium's `morphology_focus/*.ome.tif` files are OME-TIFF, not zarr — none of the
-Xenium output is actually OME-NGFF (see CLAUDE.md). This produces a real one, and
+Xenium output is actually OME-NGFF (see skills/developers.md). This produces a real one, and
 it's what `cytos-import` calls to fill a slide's `images/` when the source has
 no OME-Zarr of its own yet.
 

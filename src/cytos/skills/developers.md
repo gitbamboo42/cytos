@@ -1,4 +1,13 @@
-# cytos
+# cytos developer guide
+
+AI-oriented onboarding for working on the cytos codebase. Vendor-neutral —
+symlink to it as `CLAUDE.md`, `.cursorrules`, `AGENTS.md`, or whatever your
+tool expects; human contributors can read it directly. It ships inside the
+package: `cytos-ctl skill developer` prints it. The guide for *operating*
+the viewer (driving it with `cytos-ctl`/MCP) is `users.md` next to this
+file — `cytos-ctl skill`.
+
+## What cytos is
 
 A fast, read-only viewer for spatial biology data: cell segmentation polygons
 drawn over a large OME-Zarr morphology image. Dropping editability (unlike
@@ -21,8 +30,12 @@ calls.)
 `src/cytos/` splits the way napari splits `layers/`+`components/` (core model)
 from `_vispy/` (rendering backend) from `_qt/` (UI): `core/` (pure data model,
 no GPU/UI imports), `prep/` (offline preprocessing), `render/` (pygfx scene
-construction), `ui/` (Qt widgets only) — one-directional, each layer
-importable without the ones "above" it.
+construction), `remote/` (control socket, `cytos-ctl`, MCP — no UI imports),
+`ui/` (Qt widgets only) — one-directional, each layer importable without the
+ones "above" it. Two more places carry the outward face: `cli.py` at the
+root (the one place listing every console script) and `skills/` (the
+shipped AI guides plus the `guide_text()` that serves them to `cytos-ctl
+skill` and the MCP `usage_guide` tool).
 
 `tools/make_synthetic_big_pyramid.py` and `tools/make_label_mask.py` stay
 outside the package, deliberately: dev-only generators, no end user needs
@@ -93,6 +106,45 @@ rather than deriving its own; `cytos.prep.tiling.sort_and_tile` silently
 segmentation would otherwise import without complaint and draw as a smear along
 one side. `check_bounds_fit_slide` is what refuses that, and it runs before the
 expensive tracing step, not after it.
+
+## Remote control — the viewer is scriptable, including by AI
+
+The single-instance socket (how a second launch raises the first) doubles as
+a JSON command channel: `cytos-ctl` sends one JSON line, the app answers with
+one (`src/cytos/remote/ipc.py` is the wire, `_dispatch` in
+`src/cytos/ui/main_window.py` is the complete command list). Three rules keep
+it honest. Commands go **through the dock-panel widgets** — each
+`WindowController` method (`src/cytos/ui/controller.py`) calls the existing
+rows' `apply()`, whose signals reach the tile caches, so a remote command and
+a mouse click are one code path and the panel never lies. The vocabulary is
+the **saved-session vocabulary** — `state` returns what `collect_session`
+writes, `set` takes a partial dict of the same shape, so the session file
+format is the API and there is no second schema. And `describe` lists every
+legal value (layer keys, colormaps, features, genes), so a caller — human or
+AI — can always form a valid command instead of guessing; invalid values are
+rejected with the legal list, never silently ignored (Qt combo boxes ignore
+unknown `setCurrentText`, which is exactly the trap). `snapshot` renders
+**offscreen, never via the window**: `render_offscreen` in `build_window` runs
+the frame prep (tile loads are synchronous) and `renderer.render(...,
+flush=False)`, skipping only the blit-to-canvas. Relying on a widget repaint
+was tried first and returned stale frames — Qt won't paint a hidden or
+occluded window, and back-to-back socket commands leave no time for the
+render loop to catch up. Remote `open` takes a session name to skip the
+picker dialog (`build_window(session_name=)`); it enforces the same
+one-window-per-session rule the picker does.
+
+`cytos-mcp` (`src/cytos/remote/mcp_server.py`, optional extra `cytos[mcp]`) serves
+the same socket over MCP for AI clients with no shell; it is a pure adapter —
+every tool is one socket command, and its `snapshot` returns the PNG as MCP
+image content. It never starts the viewer.
+
+The onboarding guide for AI assistants ships *inside the package*
+(`src/cytos/skills/users.md`, printed by `cytos-ctl skill`, served by the
+MCP `usage_guide` tool — CLI-only, because cytos is an app, not a library).
+The README deliberately does not explain the
+command surface; the guide does. When a command, field, or convention
+changes, update the guide in the same change — it is the interface contract
+an AI reads, and a stale one teaches wrong commands.
 
 ## Implementation gotchas (verified against a real slide)
 

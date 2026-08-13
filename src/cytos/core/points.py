@@ -3,7 +3,7 @@ gene it belongs to. Pure numpy/pyarrow -- no pygfx/GPU dependency, see
 `cytos.render.points` for that.
 
 The third primitive alongside the OME-Zarr image and the polygon set (see
-CLAUDE.md). Where a polygon set is ragged (each cell has its own vertex run),
+skills/developers.md). Where a polygon set is ragged (each cell has its own vertex run),
 points are flat: one row per transcript, so the only per-item attribute the
 renderer needs is a small dense `gene_id` into a shared name table -- which is
 what lets colour-by-gene be a single tiny LUT upload rather than a per-point

@@ -45,7 +45,7 @@ COMPOSITE_COLORMAPS = list(_COMPOSITE_HUES.keys())
 # since composite fluorescence display is cytos's primary use case, then a
 # handful of perceptual colormaps for single-channel/scientific viewing.
 # napari's own default dropdown is a similarly curated ~30 out of its full
-# catalog, not everything at once — see CLAUDE.md.
+# catalog, not everything at once — see skills/developers.md.
 CURATED_COLORMAPS = [
     *_COMPOSITE_HUES.keys(),
     "gray",

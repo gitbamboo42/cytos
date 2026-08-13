@@ -244,7 +244,7 @@ def import_slide(
 
         # Percentile autocontrast, decided here rather than at every open:
         # fluorescence channels are sparse and heavy-tailed, so raw min/max
-        # crushes them to near-black (see CLAUDE.md).
+        # crushes them to near-black (see skills/developers.md).
         coarsest = np.asarray(image_levels[img.id][-1].data)
         clim = [float(v) for v in np.percentile(coarsest, [1, 99.5])]
 

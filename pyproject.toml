@@ -28,8 +28,15 @@ dependencies = [
     "scipy",
 ]
 
+[project.optional-dependencies]
+# `cytos-mcp`, the MCP adapter for AI clients without a shell — optional
+# because the MCP SDK drags in a web stack the viewer itself never needs.
+mcp = ["mcp>=2"]
+
 [project.scripts]
 cytos-viewer = "cytos.cli:viewer"
+cytos-ctl = "cytos.cli:ctl"
+cytos-mcp = "cytos.cli:mcp_server"
 cytos-import = "cytos.cli:import_slide"
 cytos-convert-ome-zarr = "cytos.cli:convert_ome_zarr"
 
