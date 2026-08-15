@@ -2,26 +2,35 @@
 (Hilbert-sorted) and keeps a GPU-resident LRU cache of just the visible tiles
 as pygfx point clouds -- the same camera -> visible-tiles -> upload-new/
 evict-old loop as `cytos.render.image.TileCache` and
-`cytos.render.polygons.PolygonTileCache`.
+`cytos.render.polygons.PolygonTileCache`, plus two decisions per frame the
+other caches don't make (see `cytos.prep.points` for the cache's side):
+
+* **Which detail level.** Zoom decides, nothing else -- the same
+  `select_scale` rule the image pyramid uses, fed the point ladder. Zoomed
+  out, tiles come from an aggregate level: one weighted dot per (region,
+  gene), sitting on one of that gene's real transcripts there and sized by
+  sqrt(count). Genes never merge -- two genes in one region are two dots at
+  their own real positions, so a multi-gene view stays interleaved at
+  every zoom, the way it looks at full detail.
+* **What the visible gene set means.** One state covers every case: the
+  set of genes being shown (`None` stands for all of them). It never picks
+  the level; it only changes which genes' runs a tile read returns --
+  through the same per-tile gene index at every level. A one-gene
+  whole-slide view is that gene's weighted dots, nothing else loaded.
+  Changing the set reloads the visible tiles -- small reads by
+  construction.
 
 Points are drawn with `size_space="screen"`, so a transcript stays a
 constant-pixel dot at every zoom instead of shrinking into nothing when you
 zoom out -- the same reasoning as the polygon outline's screen-space
 thickness.
 
-Colour is per *gene*, through the shared `cytos.render.lut.IdColorLut`: every
-point carries its gene's dense id as a texcoord, so all of
-
-* switching between one flat colour and a colour per gene,
-* changing the palette, and
-* showing or hiding individual genes
-
-are the same operation -- rewrite a LUT with at most a few thousand rows and
-upload it once. None of them touch point geometry, which is what makes gene
-filtering usable on a whole-slide run of tens of millions of transcripts.
-Hiding is alpha 0 in the LUT rather than a separate visibility flag, since
-there is no per-gene object to flip: one tile's points are one draw call
-covering many genes.
+Colour is per *gene*, through the shared `cytos.render.lut.IdColorLut`:
+every point at every level carries its gene's dense id as a texcoord, so
+switching between flat colour and colour-per-gene, or changing the palette,
+is a rewrite of a LUT with at most a few thousand rows -- no tile reload at
+any level. The LUT only ever *colours* -- what is shown is decided by what
+is loaded, never by hiding entries.
 """
 
 from __future__ import annotations
@@ -32,13 +41,30 @@ import numpy as np
 import plotlet
 import pygfx as gfx
 
-from cytos.core.points import PointTileGrid, visible_point_tile_keys
+from cytos.core.points import PointTile, PointTileGrid, select_point_level, visible_point_tile_keys
 from cytos.render.image import colormap_lut_array
 from cytos.render.lut import IdColorLut
 
 # Above the polygon layer (fill 0.01, outline 0.02): a transcript sits *in* a
 # cell, so it must not be hidden by that cell's fill.
 _POINT_Z = 0.03
+
+# Read optimisation only, never a behaviour boundary: a gene set up to this
+# size loads full-detail tiles via the per-tile gene index (a few contiguous
+# slices per tile); past it, slice reads stop being cheaper than reading the
+# whole tile and filtering in memory. Either way the same points end up on
+# screen.
+GENE_SLICE_MAX = 256
+
+# Aggregate dot sizes, in screen px before the layer's size scaling. The
+# bin grid puts neighbouring dots ~3-6 px apart at the zooms a level serves,
+# so the largest dot must stay near that spacing -- sized past it, dense
+# tissue floods into one solid mass and the density reading is gone. Sizes
+# spread sqrt(count / tile max) across this range: area tracks count (the
+# same encoding Explorer's scaled view uses), normalised within the tile so
+# hotspots stand out of dense tissue instead of everything saturating.
+_AGG_SIZE_MIN = 1.2
+_AGG_SIZE_MAX = 6.0
 
 # Qualitative palettes, for colour-per-gene. tab10 is the default because the
 # common case is a handful of selected genes taking the first few entries, and
@@ -78,7 +104,9 @@ def gene_colors(
     palette: str = DEFAULT_PALETTE,
     visible: set[int] | None = None,
 ) -> np.ndarray:
-    """(n, 4) float32 RGBA per dense gene id, with hidden genes at alpha 0.
+    """(n, 4) float32 RGBA per dense gene id. Genes outside `visible` are
+    zeroed -- not to hide them (unselected genes are never loaded, let alone
+    drawn) but simply because no colour is spent on them.
 
     The palette is spent on the genes actually being *looked at*, not on the
     whole panel. Showing everything (`visible=None`) can only cycle the palette
@@ -149,16 +177,13 @@ class PointTileCache:
     # -- color -------------------------------------------------------------
 
     def _refresh_colors(self) -> None:
-        # Alpha 0 rather than a removed vertex, in both modes: hiding a gene
-        # must not cost a geometry rebuild of every visible tile.
+        # The LUT only colours -- genes outside the visible set are never
+        # loaded, so there is nothing to hide here. In gene mode a selection
+        # still ranks its palette colours (see `gene_colors`).
         if self.color_mode == COLOR_MODE_GENE:
             colors = gene_colors(self.n_genes, self.palette, self._visible_genes)
         else:
-            colors = flat_colors(self.n_genes, self.colormap).copy()
-            if self._visible_genes is not None:
-                hidden = np.ones(self.n_genes, dtype=bool)
-                hidden[[g for g in self._visible_genes if 0 <= g < self.n_genes]] = False
-                colors[hidden, 3] = 0.0
+            colors = flat_colors(self.n_genes, self.colormap)
         self._lut.set_colors(colors)
 
     def set_color_mode(self, mode: str) -> None:
@@ -174,39 +199,117 @@ class PointTileCache:
         self._refresh_colors()
 
     def set_visible_genes(self, gene_ids: set[int] | None) -> None:
-        """`None` shows every gene. An empty set hides them all -- which is a
-        real state the UI can be in ("uncheck all"), not an error."""
-        self._visible_genes = None if gene_ids is None else set(gene_ids)
+        """The visible gene set. `None` stands for every gene; an empty set
+        is an ordinary value that shows none of them. A tile's geometry
+        holds exactly the set's points (or its re-weighted aggregate dots),
+        so a different set means different geometry: drop the cached tiles
+        and let update() reload -- small reads by construction."""
+        new = None if gene_ids is None else set(gene_ids)
+        if new != self._visible_genes:
+            self._visible_genes = new
+            self._clear_tiles()
         self._refresh_colors()
+
+    def _clear_tiles(self) -> None:
+        for points in self._cache.values():
+            if points is not None:
+                self._group.remove(points)
+        self._cache.clear()
+        self._live = set()
 
     # -- appearance --------------------------------------------------------
 
     def set_size(self, size: float) -> None:
         self.size = float(size)
         for points in self._cache.values():
+            if points is None:
+                continue
+            if points.material.size_mode == "vertex":
+                # Aggregate sizes are baked per vertex from this base size;
+                # cheapest correct move is a reload of the few coarse tiles.
+                self._clear_tiles()
+                return
             points.material.size = self.size
 
     def set_opacity(self, opacity: float) -> None:
         self.opacity = float(opacity)
         for points in self._cache.values():
-            points.material.opacity = self.opacity
+            if points is not None:
+                points.material.opacity = self.opacity
 
     # -- tiles -------------------------------------------------------------
 
-    def _make_tile(self, row: int, col: int) -> gfx.Points:
-        tile = self.grid.tile(row, col)
+    def _make_tile(self, depth: int, row: int, col: int) -> gfx.Points | None:
+        sel = self._visible_genes
+        if sel is not None and not sel:
+            # The empty set: nothing to read, so don't.
+            return None
+        if sel is not None and len(sel) > GENE_SLICE_MAX:
+            # Too many genes for slice reads to win: read the whole tile and
+            # filter in memory. Same points on screen as the sliced path.
+            whole = self.grid.tile(row, col, depth=depth)
+            keep = np.isin(whole.gene_id, np.fromiter(sel, dtype=np.int64))
+            tile = PointTile(
+                coords=whole.coords[keep],
+                gene_id=whole.gene_id[keep],
+                count=None if whole.count is None else whole.count[keep],
+                size=None if whole.size is None else whole.size[keep],
+            )
+        else:
+            tile = self.grid.tile(row, col, depth=depth, genes=sel)
+        if len(tile.coords) == 0:
+            # A filtered read can come back empty (none of the set's genes in
+            # this tile) -- cache the emptiness, pygfx can't hold a
+            # zero-length buffer.
+            return None
 
         positions = np.zeros((len(tile.coords), 3), dtype=np.float32)
         positions[:, :2] = tile.coords
         positions[:, 2] = _POINT_Z
 
-        geometry = gfx.Geometry(positions=positions, texcoords=self._lut.uv(tile.gene_id))
-        material = gfx.PointsMaterial(
-            size=self.size,
-            size_space="screen",
-            map=self._lut.map,
-            color_mode="vertex_map",
-        )
+        if tile.count is not None:
+            # Weighted points (an aggregate level): the same LUT colouring
+            # as everywhere else -- a dot is one gene's dot -- plus a
+            # per-vertex size from its weight, normalised within the tile
+            # so hotspots stand out of dense tissue.
+            rel = np.sqrt(tile.count.astype(np.float32) / float(tile.count.max()))
+            sizes = (
+                (_AGG_SIZE_MIN + (_AGG_SIZE_MAX - _AGG_SIZE_MIN) * rel) * (self.size / 3.0)
+            ).astype(np.float32)
+            geometry = gfx.Geometry(
+                positions=positions,
+                texcoords=self._lut.uv(tile.gene_id),
+                sizes=sizes,
+            )
+            material = gfx.PointsMaterial(
+                size_space="screen",
+                size_mode="vertex",
+                map=self._lut.map,
+                color_mode="vertex_map",
+            )
+        elif tile.size is not None:
+            # Full detail from a source whose points carry their own size:
+            # per-point multiplier on the layer's point size, still colored
+            # per gene through the LUT.
+            geometry = gfx.Geometry(
+                positions=positions,
+                texcoords=self._lut.uv(tile.gene_id),
+                sizes=(tile.size * self.size).astype(np.float32),
+            )
+            material = gfx.PointsMaterial(
+                size_space="screen",
+                size_mode="vertex",
+                map=self._lut.map,
+                color_mode="vertex_map",
+            )
+        else:
+            geometry = gfx.Geometry(positions=positions, texcoords=self._lut.uv(tile.gene_id))
+            material = gfx.PointsMaterial(
+                size=self.size,
+                size_space="screen",
+                map=self._lut.map,
+                color_mode="vertex_map",
+            )
         material.opacity = self.opacity
         # Same reason as the polygon fill: the image tiles below blend
         # *additively* (see cytos.render.image), and "auto" would add points to
@@ -215,22 +318,30 @@ class PointTileCache:
         material.alpha_mode = "blend"
         return gfx.Points(geometry, material)
 
-    def update(self, world_rect: tuple[float, float, float, float]) -> dict:
-        needed = set(visible_point_tile_keys(self.grid, world_rect))
+    def update(
+        self,
+        world_rect: tuple[float, float, float, float],
+        world_per_px: float | None = None,
+    ) -> dict:
+        level = select_point_level(self.grid.levels, world_per_px)
+        depth = self.grid.tile_depth - level
+        needed = {(depth, r, c) for r, c in visible_point_tile_keys(self.grid, world_rect, depth)}
         self._live = needed
 
         fetched = 0
         for key in needed:
             if key not in self._cache:
-                row, col = key
-                self._cache[key] = self._make_tile(row, col)
-                self._group.add(self._cache[key])
+                points = self._make_tile(*key)
+                self._cache[key] = points
+                if points is not None:
+                    self._group.add(points)
                 fetched += 1
             else:
                 self._cache.move_to_end(key)
 
         for key, points in self._cache.items():
-            points.visible = key in needed
+            if points is not None:
+                points.visible = key in needed
 
         evicted = 0
         while len(self._cache) > self.max_tiles:
@@ -241,10 +352,12 @@ class PointTileCache:
                 self._cache[old_key] = old_points
                 self._cache.move_to_end(old_key)
                 break
-            self._group.remove(old_points)
+            if old_points is not None:
+                self._group.remove(old_points)
             evicted += 1
 
         return {
+            "level": level,
             "needed": len(needed),
             "fetched": fetched,
             "evicted": evicted,

@@ -8,9 +8,9 @@ at once, each in its own colour. So the list is checkable, sorted by abundance
 rather than alphabetically (the genes worth looking at first are the ones
 actually detected), and filterable by typing.
 
-Checking and unchecking only rewrites a colour LUT of one row per gene (see
-`cytos.render.points`), so this stays instant no matter how many transcripts
-are on screen.
+Checking and unchecking reloads only the checked genes' runs of the visible
+tiles, at whatever detail level the zoom is using (see `cytos.render.points`)
+-- so it stays quick no matter how many transcripts the run has.
 """
 
 from __future__ import annotations

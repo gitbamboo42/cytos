@@ -702,7 +702,16 @@ def build_window(
         points_section.visibility_changed.connect(on_points_section_visibility)
 
         for layer, grid, cache in point_layers:
-            saved_genes = saved_layers.get(f"points:{layer.id}", {}).get("genes")
+            # A fresh session starts with *no* genes selected -- drawing all
+            # of a 5K panel unprompted answers a question nobody asked. Only
+            # a session that saved a genes entry gets it back, and there None
+            # keeps meaning "all" (the saved-session vocabulary).
+            saved_points = saved_layers.get(f"points:{layer.id}", {})
+            if "genes" in saved_points:
+                saved_genes = saved_points["genes"]
+                initial_genes = None if saved_genes is None else set(saved_genes)
+            else:
+                initial_genes = set()
             points_row = PointsRow(
                 layer.id.capitalize(),
                 grid.gene_names,
@@ -712,7 +721,7 @@ def build_window(
                 cache.colormap,
                 cache.size,
                 cache.opacity,
-                set(saved_genes) if saved_genes is not None else None,
+                initial_genes,
             )
             points_row.color_mode_changed.connect(cache.set_color_mode)
             points_row.palette_changed.connect(cache.set_palette)
@@ -722,10 +731,9 @@ def build_window(
             points_row.visible_genes_changed.connect(cache.set_visible_genes)
             points_section.add_widget(points_row)
             point_rows.append((layer, grid.gene_names, points_row))
-            if saved_genes is not None:
-                # The row was *built* with the saved selection, so it never
-                # emitted -- push it through once so the LUT agrees with it.
-                cache.set_visible_genes(set(saved_genes))
+            # The row was *built* with this selection, so it never emitted --
+            # push it through once so the cache agrees with it.
+            cache.set_visible_genes(initial_genes)
     else:
         points_section.setEnabled(False)
 
@@ -777,16 +785,21 @@ def build_window(
         images_section.setEnabled(False)
 
     # After the rows exist and the section handlers are connected, so a
-    # restored section checkbox actually reaches the layers under it.
+    # restored (or default) section checkbox actually reaches the layers
+    # under it. Fresh sessions start with only the images drawn: segments
+    # and points are one checkbox away, not on-by-default work -- a 5K-panel
+    # slide should open showing morphology, not everything it holds.
     saved_sections = session.get("sections", {})
-    for name, section, default_expanded in (
-        ("images", images_section, True),
-        ("segments", segments_section, True),
-        ("points", points_section, False),
+    for name, section, default_expanded, default_checked in (
+        ("images", images_section, True, True),
+        ("segments", segments_section, True, False),
+        ("points", points_section, False, False),
     ):
         saved = saved_sections.get(name)
         if saved:
             section.apply(bool(saved.get("expanded", default_expanded)), bool(saved.get("checked", True)))
+        else:
+            section.apply(default_expanded, default_checked)
 
     refresh_minimap()
 
@@ -1026,11 +1039,12 @@ def build_window(
                 layer.colormap, color_by, layer.show_outline, layer.show_fill, layer.fill_opacity, layer.visible
             )
         for layer, _genes, row in point_rows:
-            # Genes have no manifest default -- "all of them" is the default.
-            row.apply(layer.color_mode, layer.palette, layer.colormap, layer.size, layer.opacity, None)
+            # Genes have no manifest default -- "none selected" is the
+            # default, same as a fresh session.
+            row.apply(layer.color_mode, layer.palette, layer.colormap, layer.size, layer.opacity, set())
         images_section.apply(True, True)
-        segments_section.apply(True, True)
-        points_section.apply(False, True)
+        segments_section.apply(True, False)
+        points_section.apply(False, False)
         fit_camera_to_slide()
         refresh_minimap()
         # The session file isn't deleted -- you named it, so it stays and is
@@ -1099,8 +1113,10 @@ def build_window(
             stats = cache.update(world_rect)
             lines.append(f"{layer.id[:12]:12s} n={stats['needed']} c={stats['cache_size']}")
         for layer, _grid, cache in point_layers:
-            stats = cache.update(world_rect)
-            lines.append(f"{layer.id[:12]:12s} n={stats['needed']} c={stats['cache_size']}")
+            stats = cache.update(world_rect, world_per_px)
+            lines.append(
+                f"{layer.id[:12]:12s} L{stats['level']} n={stats['needed']} c={stats['cache_size']}"
+            )
 
         latest_stats_text[0] = "\n".join(lines)
 

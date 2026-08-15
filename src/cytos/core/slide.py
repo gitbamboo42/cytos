@@ -105,13 +105,18 @@ class SegmentLayer:
 
 @dataclass
 class PointLayer:
-    """A tiled transcript point cloud (`cytos.prep.points`)."""
+    """A tiled transcript point cloud (`cytos.prep.points`).
+
+    `levels` counts detail levels: full-detail tiles at `tile_depth` plus
+    aggregate levels up to depth 0. 1 means a slide from before levels
+    existed -- full detail only, which still draws."""
 
     id: str
     path: Path
     tile_depth: int
     tiles: set[tuple[int, int]]
     n_points: int
+    levels: int = 1
     format: str = TILES_FORMAT
     palette: str = "tab10"
     colormap: str = "yellow"
@@ -204,6 +209,7 @@ def load_slide(path: Path | str) -> Slide:
                     tile_depth=int(layer.get("tile_depth", slide.tile_depth)),
                     tiles=_tiles_to_set(layer.get("tiles", [])),
                     n_points=int(layer.get("n_points", 0)),
+                    levels=int(layer.get("levels", 1)),
                     format=layer.get("format", TILES_FORMAT),
                     palette=layer.get("palette", "tab10"),
                     colormap=layer.get("colormap", "yellow"),

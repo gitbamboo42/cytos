@@ -70,6 +70,14 @@ Only the fields you give change. Notes that will save you a retry:
 - `genes` accepts names or ids; `null` means all genes. Point layers have no
   per-layer `visible` — turn the whole `points` section on/off instead
   (`"sections": {"points": {"checked": true}}`).
+- A snapshot showing less than you expected is usually state, not a bug:
+  read `state` (sections checked? genes selected? layer visible?) before
+  concluding anything about the data.
+- Zoomed out, a point layer draws *aggregated* dots — one dot per gene per
+  region, sitting on one of that gene's real transcripts there, in that
+  gene's color, sized by how many it stands for. A gene selection narrows
+  which genes' dots load, at any zoom; individual transcripts appear when
+  you zoom in past about 0.5 µm per screen pixel.
 - Camera: `width` alone keeps the aspect ratio ("show 500 µm across").
   `{"fit": true}` shows the whole slide.
 - `state` reads the current values back in the same shape — you can edit its

@@ -321,6 +321,7 @@ def import_slide(
                 "tile_depth": stats["tile_depth"],
                 "tiles": stats["tiles"],
                 "n_points": stats["n_points"],
+                "levels": stats["levels"],
                 "palette": "tab10",
                 "colormap": "yellow",
                 "color_mode": "gene",

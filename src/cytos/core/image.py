@@ -119,17 +119,30 @@ def pyramid_levels(root: zarr.Group, label: str) -> list[PyramidLevel]:
     return levels
 
 
+def select_scale(scales: list[float], world_per_px: float) -> int:
+    """THE level-selection rule -- every pyramid in cytos goes through this
+    one function, so no layer can drift onto its own switching logic.
+    `scales` is the ladder: each level's resolution in world units per
+    screen pixel, finest first, coarsening as you climb. Picks the coarsest
+    level still at least as fine as the screen, clamping to the finest level
+    zoomed in past the ladder and the coarsest zoomed out past it. What
+    differs between layers is only the ladder each one brings: an image
+    pyramid brings its levels' actual pixel sizes, a point layer brings its
+    aggregation ladder (see `cytos.core.points.select_point_level`)."""
+    best = 0
+    for i, scale in enumerate(scales):
+        if scale <= world_per_px:
+            best = i
+        else:
+            break
+    return best
+
+
 def select_level(levels: list[PyramidLevel], world_per_px: float) -> int:
     """Coarsest level whose pixel size is still <= world_per_px (i.e. still >=1
     screen pixel). Clamps to level 0 if zoomed in past native resolution, and to
     the coarsest level if zoomed out past it."""
-    best = 0
-    for lvl in levels:
-        if lvl.scale[0] <= world_per_px:
-            best = lvl.index
-        else:
-            break
-    return best
+    return select_scale([lvl.scale[0] for lvl in levels], world_per_px)
 
 
 def visible_chunk_keys(level: PyramidLevel, world_rect: tuple[float, float, float, float]) -> list[tuple[int, int]]:
