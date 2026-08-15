@@ -58,7 +58,7 @@ from cytos.core.slide import SLIDE_SUFFIX, load_slide
 from cytos.core.image import load_pyramid_levels, select_level
 from cytos.core.session import DEFAULT_SESSION_NAME, load_session, save_session
 from cytos.core.points import load_point_tile_grid
-from cytos.core.polygons import load_polygon_tile_grid, feature_names
+from cytos.core.polygons import is_categorical_feature, load_polygon_tile_grid, feature_names
 from cytos.render.camera import effective_camera_view_size
 from cytos.render.image import COMPOSITE_COLORMAPS, TileCache
 from cytos.render.points import PointTileCache
@@ -80,7 +80,7 @@ from cytos.ui.import_window import AddSegmentsPanel, ImportPanel
 # session and re-read the manifest" rather than a second list of magic values.
 _STATE_FIELDS = {
     "image": ("visible", "colormap", "clim"),
-    "segments": ("visible", "colormap", "color_by", "show_outline", "show_fill", "fill_opacity"),
+    "segments": ("visible", "colormap", "color_by", "show_outline", "show_fill", "fill_opacity", "palette", "category_colors", "hidden_categories"),
     "points": ("visible", "color_mode", "palette", "colormap", "size", "opacity"),
 }
 
@@ -99,6 +99,27 @@ def _restore(layer, kind: str, state: dict) -> None:
     for field in _STATE_FIELDS[kind]:
         if field in state:
             setattr(layer, field, state[field])
+
+
+def _categorical_info(features) -> dict[str, list[tuple[str, int]]]:
+    """feature -> [(category key, cell count)] for every categorical column
+    -- what the segment row's legend lists and describe() reports as the
+    legal categories. Keys are strings ("7"), plus "unassigned" when cells
+    are absent from the feature, matching the session's JSON form."""
+    info = {}
+    if features is None:
+        return info
+    for f in features.schema:
+        if not is_categorical_feature(f):
+            continue
+        v = features.column(f.name).to_numpy(zero_copy_only=False).astype(np.float64)
+        cats, counts = np.unique(v[np.isfinite(v)].astype(np.int64), return_counts=True)
+        entries = [(str(c), int(n)) for c, n in zip(cats, counts)]
+        n_unassigned = int(np.isnan(v).sum())
+        if n_unassigned:
+            entries.append(("unassigned", n_unassigned))
+        info[f.name] = entries
+    return info
 
 
 # Every open window lives here. Qt does not own a top-level window on Python's
@@ -513,6 +534,9 @@ def build_window(
             max_tiles=max_tiles,
             colormap=layer.colormap,
             color_by=color_by,
+            palette=layer.palette,
+            category_overrides=layer.category_colors,
+            category_hidden=layer.hidden_categories,
             show_outline=layer.show_outline,
             show_fill=layer.show_fill,
             fill_opacity=layer.fill_opacity,
@@ -664,19 +688,26 @@ def build_window(
 
     segments_section.visibility_changed.connect(on_segments_section_visibility)
 
-    def add_segment_row(layer, cache, feature_names) -> SegmentRow:
+    def add_segment_row(layer, grid, cache, feature_list) -> SegmentRow:
         segment_row = SegmentRow(
             layer.id.capitalize(),
-            feature_names,
+            feature_list,
+            _categorical_info(grid.features),
             cache.colormap,
             cache.color_by,
             cache.show_outline,
             cache.show_fill,
             cache.fill_opacity,
             layer.visible,
+            palette=layer.palette,
+            category_colors=layer.category_colors,
+            hidden_categories=layer.hidden_categories,
         )
         segment_row.colormap_changed.connect(cache.set_colormap)
         segment_row.color_by_changed.connect(cache.set_color_by)
+        segment_row.palette_changed.connect(cache.set_palette)
+        segment_row.category_colors_changed.connect(cache.set_category_overrides)
+        segment_row.hidden_categories_changed.connect(cache.set_category_hidden)
         segment_row.outline_changed.connect(cache.set_outline_visible)
         segment_row.fill_changed.connect(cache.set_fill_visible)
         segment_row.fill_opacity_changed.connect(cache.set_fill_opacity)
@@ -687,11 +718,11 @@ def build_window(
 
         segment_row.visibility_changed.connect(on_segment_visibility)
         segments_section.add_widget(segment_row)
-        segment_rows.append((layer, feature_names, segment_row))
+        segment_rows.append((layer, feature_list, segment_row))
         return segment_row
 
-    for layer, _grid, cache, layer_features in segment_layers:
-        add_segment_row(layer, cache, layer_features)
+    for layer, grid, cache, layer_features in segment_layers:
+        add_segment_row(layer, grid, cache, layer_features)
     segments_section.setEnabled(bool(segment_layers))
 
     if point_layers:
@@ -873,8 +904,8 @@ def build_window(
             if layer.id in known:
                 continue
             slide.segments.append(layer)
-            _grid, cache, layer_features = build_segment_layer(layer)
-            add_segment_row(layer, cache, layer_features)
+            new_grid, cache, layer_features = build_segment_layer(layer)
+            add_segment_row(layer, new_grid, cache, layer_features)
             defaults[f"segments:{layer.id}"] = _capture(layer, "segments")
             segment_visibility[layer.id] = layer.visible
             cache.group.visible = layer.visible and segments_section.is_checked()
@@ -1036,7 +1067,9 @@ def build_window(
         for layer, layer_features, row in segment_rows:
             color_by = layer.color_by if layer.color_by in layer_features else None
             row.apply(
-                layer.colormap, color_by, layer.show_outline, layer.show_fill, layer.fill_opacity, layer.visible
+                layer.colormap, color_by, layer.show_outline, layer.show_fill,
+                layer.fill_opacity, layer.visible, layer.palette,
+                layer.category_colors, layer.hidden_categories,
             )
         for layer, _genes, row in point_rows:
             # Genes have no manifest default -- "none selected" is the

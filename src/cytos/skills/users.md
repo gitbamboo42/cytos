@@ -68,7 +68,12 @@ Only the fields you give change. Notes that will save you a retry:
 
 - `color_by: null` means flat color; the feature names come from `describe`.
   Categorical features (clusterings like `cluster`, `kmeans_5`) draw with a
-  qualitative palette — the `colormap` only affects numeric features.
+  qualitative palette, not the `colormap`: pick it with `palette`, recolor
+  single categories with `category_colors` (e.g.
+  `{"cluster": {"7": "#e41a1c"}}`), and hide some entirely with
+  `hidden_categories` (e.g. `{"cluster": ["3", "unassigned"]}`) —
+  `describe` lists each layer's categorical features and their legal
+  category keys under `categories`.
 - `genes` accepts names or ids; `null` means all genes. Point layers have no
   per-layer `visible` — turn the whole `points` section on/off instead
   (`"sections": {"points": {"checked": true}}`).
@@ -101,7 +106,9 @@ matches the data files, napari, QuPath, and Fiji.
 `snapshot` renders the current state fresh (it never returns a stale frame,
 even if the window is hidden) and writes a PNG; over MCP it returns the
 image inline. Take one after any change you care about and *look at it* —
-the render is the ground truth, not the state JSON.
+the render is the ground truth, not the state JSON. `snapshot --panel`
+captures the dock panel (the controls) instead of the slide — for checking
+UI work with your own eyes, not for looking at data.
 
 ## Sessions and politeness
 

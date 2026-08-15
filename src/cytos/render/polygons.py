@@ -39,7 +39,7 @@ import pygfx as gfx
 from cytos.core.polygons import PolygonTileGrid, is_categorical_feature, visible_polygon_tile_keys
 from cytos.render.image import colormap_lut_array
 from cytos.render.lut import IdColorLut
-from cytos.render.points import palette_array
+from cytos.render.points import hex_to_rgba, palette_array
 
 # Both layers sit just in front of the image tiles (z=0) so neither depends on
 # scene insertion order to land on top, and the outline sits in front of its
@@ -84,24 +84,47 @@ def feature_colors(values: np.ndarray, colormap: str) -> np.ndarray:
 
 # Categorical features (a clustering, not a measurement) get a qualitative
 # palette, not a ramp: a ramp's order would imply cluster 7 is "more" than
-# cluster 2. tab20 because clusterings regularly exceed ten categories and
-# here the palette only separates neighbours, the same reason the point
-# layer allows it for many-gene views. Colour comes straight from the
-# category number, so a category keeps its colour across layers, slides
-# and sessions.
-_CATEGORY_PALETTE = "tab20"
+# cluster 2. tab20 as the default because clusterings regularly exceed ten
+# categories and here the palette only separates neighbours, the same
+# reason the point layer allows it for many-gene views. Colour comes
+# straight from the category number, so a category keeps its colour across
+# layers, slides and sessions -- until a session overrides it, which is
+# the user's "make it pretty" knob and lives in the session, never in the
+# slide's data.
+DEFAULT_CATEGORY_PALETTE = "tab20"
 # Unassigned (null) objects: dim gray, visible but clearly not a category.
 _UNASSIGNED_RGBA = (0.45, 0.45, 0.45, 1.0)
 
 
-def category_colors(values: np.ndarray) -> np.ndarray:
+def _category_mask(values: np.ndarray, key: str) -> np.ndarray:
+    """Which cells belong to category `key` -- a number as a string, or
+    "unassigned" for cells absent from the feature (NaN)."""
+    if key == "unassigned":
+        return ~np.isfinite(values)
+    return values == float(key)
+
+
+def category_colors(
+    values: np.ndarray,
+    palette: str = DEFAULT_CATEGORY_PALETTE,
+    overrides: dict[str, str] | None = None,
+    hidden: set[str] | None = None,
+) -> np.ndarray:
     """(n, 4) float32 RGBA for categorical features: `values` is the
-    per-cell category number as float, NaN where a cell is unassigned."""
-    pal = palette_array(_CATEGORY_PALETTE)
+    per-cell category number as float, NaN where a cell is unassigned.
+    `overrides` maps a category key to a "#rrggbb" of the user's own
+    choosing on top of the palette; `hidden` names categories drawn not at
+    all (alpha 0 -- for a monolithic polygon tile, the LUT is the only
+    per-cell hiding mechanism there is)."""
+    pal = palette_array(palette)
     colors = np.empty((len(values), 4), dtype=np.float32)
     colors[:] = _UNASSIGNED_RGBA
     assigned = np.isfinite(values)
     colors[assigned] = pal[values[assigned].astype(np.int64) % len(pal)]
+    for key, hex_color in (overrides or {}).items():
+        colors[_category_mask(values, key)] = hex_to_rgba(hex_color)
+    for key in hidden or ():
+        colors[_category_mask(values, key), 3] = 0.0
     return colors
 
 
@@ -136,6 +159,9 @@ class PolygonTileCache:
         show_outline: bool = True,
         show_fill: bool = False,
         fill_opacity: float = 0.35,
+        palette: str = DEFAULT_CATEGORY_PALETTE,
+        category_overrides: dict[str, dict[str, str]] | None = None,
+        category_hidden: dict[str, list[str]] | None = None,
     ):
         self.grid = grid
         self.max_tiles = max_tiles
@@ -145,6 +171,13 @@ class PolygonTileCache:
         self.show_outline = show_outline
         self.show_fill = show_fill
         self.fill_opacity = fill_opacity
+        self.palette = palette
+        # feature -> {category key -> "#rrggbb"} and feature -> hidden keys:
+        # kept per feature, so tweaks to "cluster" survive switching
+        # color_by to "kmeans_5" and back. Category keys are strings ("7",
+        # "unassigned"), matching what the session stores.
+        self.category_overrides = dict(category_overrides or {})
+        self.category_hidden = dict(category_hidden or {})
 
         self._group = gfx.Group()
         self._cache: OrderedDict[tuple[int, int], _Tile] = OrderedDict()
@@ -178,7 +211,9 @@ class PolygonTileCache:
             if is_categorical_feature(features.schema.field(self.color_by)):
                 # Marked categorical at import (see cytos.core.polygons.
                 # join_categories): palette, not ramp -- no name matching.
-                self.set_colors(category_colors(values))
+                overrides = self.category_overrides.get(self.color_by, {})
+                hidden = set(self.category_hidden.get(self.color_by, ()))
+                self.set_colors(category_colors(values, self.palette, overrides, hidden))
             else:
                 self.set_colors(feature_colors(values, self.colormap))
         else:
@@ -190,6 +225,21 @@ class PolygonTileCache:
 
     def set_color_by(self, color_by: str | None) -> None:
         self.color_by = color_by
+        self._refresh_colors()
+
+    def set_palette(self, palette: str) -> None:
+        self.palette = palette
+        self._refresh_colors()
+
+    def set_category_overrides(self, overrides: dict[str, dict[str, str]]) -> None:
+        """Replace the whole feature -> {category key -> hex} mapping (the
+        panel owns the editing; this cache just displays it)."""
+        self.category_overrides = dict(overrides or {})
+        self._refresh_colors()
+
+    def set_category_hidden(self, hidden: dict[str, list[str]]) -> None:
+        """Replace the whole feature -> hidden category keys mapping."""
+        self.category_hidden = dict(hidden or {})
         self._refresh_colors()
 
     # -- what's drawn ------------------------------------------------------

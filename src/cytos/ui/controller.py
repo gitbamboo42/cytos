@@ -30,7 +30,7 @@ from cytos.ui.segment_panel import FLAT_COLOR_LABEL
 # section master switch (`sections.points.checked`) — see cytos.ui.points_panel.
 _LAYER_FIELDS = {
     "image": {"visible", "colormap", "clim"},
-    "segments": {"visible", "colormap", "color_by", "show_outline", "show_fill", "fill_opacity"},
+    "segments": {"visible", "colormap", "color_by", "show_outline", "show_fill", "fill_opacity", "palette", "category_colors", "hidden_categories"},
     "points": {"color_mode", "palette", "colormap", "size", "opacity", "genes"},
 }
 
@@ -52,6 +52,54 @@ def _check_fields(partial: dict, allowed: set[str], key: str) -> None:
         raise CommandError(
             f"'{key}' has no field(s) {sorted(unknown)} — settable: {sorted(allowed)}"
         )
+
+
+def _check_categorical_feature(feature: str, categorical: dict) -> None:
+    if feature not in categorical:
+        raise CommandError(
+            f"'{feature}' is not a categorical feature — one of: {', '.join(categorical) or '(none)'}"
+        )
+
+
+def _check_category_key(category, feature: str, categorical: dict) -> str:
+    legal = [k for k, _n in categorical[feature]]
+    if str(category) not in legal:
+        raise CommandError(f"'{feature}' has no category '{category}' — one of: {', '.join(legal)}")
+    return str(category)
+
+
+def _check_category_colors(value, categorical: dict) -> dict:
+    """Validate a feature -> {category -> "#rrggbb"} mapping against the
+    layer's actual categorical features, normalising category keys to the
+    strings the session stores ("7", or "unassigned")."""
+    if not isinstance(value, dict):
+        raise CommandError('category_colors must be an object like {"cluster": {"7": "#e41a1c"}}')
+    checked: dict[str, dict[str, str]] = {}
+    for feature, colors in value.items():
+        _check_categorical_feature(feature, categorical)
+        if not isinstance(colors, dict):
+            raise CommandError(f"category_colors['{feature}'] must map categories to colors")
+        checked[feature] = {}
+        for category, hex_color in colors.items():
+            key = _check_category_key(category, feature, categorical)
+            h = str(hex_color)
+            if not (len(h) == 7 and h[0] == "#" and all(c in "0123456789abcdefABCDEF" for c in h[1:])):
+                raise CommandError(f"'{hex_color}' is not a color — use \"#rrggbb\"")
+            checked[feature][key] = h.lower()
+    return checked
+
+
+def _check_hidden_categories(value, categorical: dict) -> dict:
+    """Validate a feature -> [category, ...] mapping the same way."""
+    if not isinstance(value, dict):
+        raise CommandError('hidden_categories must be an object like {"cluster": ["3", "unassigned"]}')
+    checked: dict[str, list[str]] = {}
+    for feature, keys in value.items():
+        _check_categorical_feature(feature, categorical)
+        if not isinstance(keys, (list, tuple)):
+            raise CommandError(f"hidden_categories['{feature}'] must be a list of categories")
+        checked[feature] = [_check_category_key(k, feature, categorical) for k in keys]
+    return checked
 
 
 class WindowController:
@@ -133,6 +181,11 @@ class WindowController:
                 "state": row.state(),
                 "colormaps": _combo_items(row.cmap_combo),
                 "color_by_choices": [None, *feature_names],
+                "palettes": _combo_items(row.palette_combo),
+                # Which features are categorical, and their legal category
+                # keys ("7", "unassigned") -- what category_colors and
+                # hidden_categories may name.
+                "categories": {f: [k for k, _n in cats] for f, cats in row.categorical.items()},
                 **self.layer_meta.get(key, {}),
             }
         for layer, gene_names, row in self.point_rows:
@@ -249,14 +302,25 @@ class WindowController:
                     s = {**row.state(), **partial}
                     if "colormap" in partial:
                         _check_choice(s["colormap"], row.cmap_combo, "colormap")
+                    if "palette" in partial:
+                        _check_choice(s["palette"], row.palette_combo, "palette")
                     if s["color_by"] is not None and s["color_by"] not in feature_names:
                         raise CommandError(
                             f"unknown color_by '{s['color_by']}' — null ({FLAT_COLOR_LABEL.lower()}) "
                             f"or one of: {', '.join(feature_names)}"
                         )
+                    if "category_colors" in partial:
+                        s["category_colors"] = _check_category_colors(
+                            partial["category_colors"], row.categorical
+                        )
+                    if "hidden_categories" in partial:
+                        s["hidden_categories"] = _check_hidden_categories(
+                            partial["hidden_categories"], row.categorical
+                        )
                     row.apply(
                         s["colormap"], s["color_by"], bool(s["show_outline"]),
                         bool(s["show_fill"]), float(s["fill_opacity"]), bool(s["visible"]),
+                        s["palette"], s["category_colors"], s["hidden_categories"],
                     )
                     return
         else:

@@ -101,6 +101,15 @@ class SegmentLayer:
     show_fill: bool = False
     fill_opacity: float = 0.35
     visible: bool = True
+    # Presentation of categorical features (see cytos.render.polygons):
+    # the qualitative palette, per-category colour overrides, and hidden
+    # categories -- both keyed feature -> category, where a category key is
+    # a JSON-safe string ("7", or "unassigned" for cells absent from the
+    # feature). Session state -- the importer writes none of these, so
+    # these defaults are the slide defaults.
+    palette: str = "tab20"
+    category_colors: dict = field(default_factory=dict)  # feature -> {key -> "#rrggbb"}
+    hidden_categories: dict = field(default_factory=dict)  # feature -> [key, ...]
 
 
 @dataclass
@@ -199,6 +208,9 @@ def load_slide(path: Path | str) -> Slide:
                     show_fill=bool(layer.get("show_fill", False)),
                     fill_opacity=float(layer.get("fill_opacity", 0.35)),
                     visible=bool(layer.get("visible", True)),
+                    palette=layer.get("palette", "tab20"),
+                    category_colors=dict(layer.get("category_colors", {})),
+                    hidden_categories=dict(layer.get("hidden_categories", {})),
                 )
             )
         elif kind == "points":

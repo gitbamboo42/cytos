@@ -85,7 +85,7 @@ COLOR_MODE_FLAT = "flat"
 COLOR_MODE_GENE = "gene"
 
 
-def _hex_to_rgba(value: str) -> np.ndarray:
+def hex_to_rgba(value: str) -> np.ndarray:
     value = value.lstrip("#")
     rgba = np.ones(4, dtype=np.float32)
     rgba[:3] = [int(value[i : i + 2], 16) / 255.0 for i in (0, 2, 4)]
@@ -93,7 +93,7 @@ def _hex_to_rgba(value: str) -> np.ndarray:
 
 
 def palette_array(palette: str) -> np.ndarray:
-    colors = [_hex_to_rgba(c) for c in plotlet.palette(palette)]
+    colors = [hex_to_rgba(c) for c in plotlet.palette(palette)]
     if not colors:
         colors = [np.ones(4, dtype=np.float32)]
     return np.asarray(colors, dtype=np.float32)
