@@ -117,16 +117,34 @@ def _discover_xenium(source: Path) -> tuple[list[_ImageSource], list[SegmentSour
 
     cells = source / "cells.parquet"
     cells = cells if cells.exists() else None
+    # The pipeline's clusterings (analysis/clustering/*/clusters.csv,
+    # Barcode -> 1-based cluster) become categorical features on every
+    # segment layer: "cluster" for graphclust -- the one 10x's own tools
+    # show by default -- then the fixed-k alternatives by their k.
+    categories: list[tuple[str, Path]] = []
+    for csv in sorted((source / "analysis" / "clustering").glob("*/clusters.csv")):
+        name = csv.parent.name.removeprefix("gene_expression_")
+        name = "cluster" if name == "graphclust" else name.removesuffix("_clusters")
+        categories.append((name, csv))
+    categories.sort(key=lambda nc: (nc[0] != "cluster", len(nc[0]), nc[0]))
     segments: list[SegmentSource] = []
     if (source / "cell_boundaries.parquet").exists():
-        segments.append(SegmentSource(id="cell", path=source / "cell_boundaries.parquet", cells=cells))
+        segments.append(
+            SegmentSource(
+                id="cell", path=source / "cell_boundaries.parquet", cells=cells, categories=categories
+            )
+        )
     if (source / "nucleus_boundaries.parquet").exists():
         # Off by default: nuclei sit inside the cell outlines already on
         # screen, so showing both at once reads as doubled lines rather than
         # as two layers. Present and one checkbox away.
         segments.append(
             SegmentSource(
-                id="nucleus", path=source / "nucleus_boundaries.parquet", cells=cells, visible=False
+                id="nucleus",
+                path=source / "nucleus_boundaries.parquet",
+                cells=cells,
+                visible=False,
+                categories=categories,
             )
         )
 

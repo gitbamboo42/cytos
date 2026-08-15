@@ -92,7 +92,7 @@ def _hex_to_rgba(value: str) -> np.ndarray:
     return rgba
 
 
-def _palette_array(palette: str) -> np.ndarray:
+def palette_array(palette: str) -> np.ndarray:
     colors = [_hex_to_rgba(c) for c in plotlet.palette(palette)]
     if not colors:
         colors = [np.ones(4, dtype=np.float32)]
@@ -118,7 +118,7 @@ def gene_colors(
     palette entries by rank instead: first selected gene gets the first colour,
     second the second, and they stay clearly distinct.
     """
-    pal = _palette_array(palette)
+    pal = palette_array(palette)
     if visible is None:
         return pal[np.arange(n) % len(pal)]
 

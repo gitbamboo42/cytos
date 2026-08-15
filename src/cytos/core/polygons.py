@@ -79,10 +79,47 @@ def _ring_areas(coords: np.ndarray, offsets: np.ndarray) -> np.ndarray:
     return np.abs(np.add.reduceat(cross, starts)) / 2.0 if n else np.empty(0, np.float64)
 
 
+# Field metadata that marks a features column as categorical -- a palette,
+# not a ramp (see `cytos.render.polygons`). Metadata rather than Arrow's
+# dictionary type, because parquet treats dictionaries as an *encoding* and
+# hands the column back as plain integers, while the schema's field
+# metadata survives the round trip intact. Nothing anywhere matches on
+# column names.
+CATEGORICAL_META = {b"cytos:categorical": b"true"}
+
+
+def is_categorical_feature(field: pa.Field) -> bool:
+    return bool(field.metadata) and b"cytos:categorical" in field.metadata
+
+
+def join_categories(features: pa.Table, categories: list[tuple[str, Path]]) -> pa.Table:
+    """Left-join named (id, category) tables -- e.g. a clustering's
+    `clusters.csv` -- onto a per-cell `features` table by its "id" column,
+    one new column per table, aligned by position so row order is untouched.
+    New columns carry `CATEGORICAL_META`; their values are the source's own
+    category numbers, so a category keeps one colour whatever subset of
+    cells a layer holds. Objects absent from a table get null --
+    "unassigned", drawn dim. The file's first column is the id, the second
+    the category; header names are the source's own business."""
+    import pyarrow.csv as pacsv
+
+    ids = features.column("id").combine_chunks()
+    for name, path in categories:
+        table = pacsv.read_csv(path)
+        cat_ids = table.column(0).combine_chunks().cast(ids.type)
+        pos = pc.index_in(ids, value_set=cat_ids)
+        vals = pc.take(table.column(1).combine_chunks(), pos).cast(pa.int64())
+        features = features.append_column(
+            pa.field(name, pa.int64(), metadata=CATEGORICAL_META), vals
+        )
+    return features
+
+
 def polygons_from_parquet(
     path: Path,
     cells_path: Path | None = None,
     columns: tuple[str, str, str] | None = None,
+    categories: list[tuple[str, Path]] | None = None,
 ) -> Polygons:
     """Load a long-format boundary table (one row per vertex) into the
     ragged-array model. Xenium's `*_boundaries.parquet` is the shape this was
@@ -173,6 +210,9 @@ def polygons_from_parquet(
         order = pc.index_in(joined.column("id"), original_ids)
         features = joined.take(pc.sort_indices(order))
 
+    if categories:
+        features = join_categories(features, categories)
+
     return Polygons(coords=coords, offsets=offsets, cell_id=cell_id, features=features)
 
 
@@ -246,9 +286,11 @@ def load_polygon_tile_grid(layer: SegmentLayer, world_bounds: tuple[float, float
 _NON_MEASUREMENT_FEATURES = {"id", "cell_id", "x_centroid", "y_centroid"}
 
 
-def numeric_feature_names(features: pa.Table | None) -> list[str]:
-    """Per-cell measurement columns that can drive a colormap, in table order
-    (e.g. cell_area, nucleus_area, transcript_counts, total_counts)."""
+def feature_names(features: pa.Table | None) -> list[str]:
+    """Per-cell columns that can drive the colour LUT, in table order:
+    numeric measurements (continuous ramp -- e.g. cell_area,
+    transcript_counts) and categorical columns (a palette -- e.g. a
+    clustering, see `join_categories` / `is_categorical_feature`)."""
     if features is None:
         return []
     names = []

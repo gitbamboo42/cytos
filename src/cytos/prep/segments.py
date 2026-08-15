@@ -34,10 +34,10 @@ import argparse
 import json
 import shutil
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from cytos.core.polygons import Polygons, polygons_from_parquet, numeric_feature_names
+from cytos.core.polygons import Polygons, polygons_from_parquet, feature_names
 from cytos.core.slide import (
     MANIFEST_NAME,
     TILES_FORMAT,
@@ -69,6 +69,9 @@ class SegmentSource:
     columns: tuple[str, str, str] | None = None  # (id, x, y), parquet only
     simplify: float = DEFAULT_SIMPLIFY  # label masks only
     visible: bool = True
+    # Named (id, category) tables to join as categorical features -- e.g.
+    # clusterings (see cytos.core.polygons.join_categories). Parquet only.
+    categories: list = field(default_factory=list)
 
 
 def segment_format(path: Path) -> str:
@@ -88,7 +91,7 @@ def segment_format(path: Path) -> str:
 def load_segments(source: SegmentSource, progress=print) -> Polygons:
     """Read one segmentation into the ragged-array polygon model."""
     if segment_format(source.path) == FORMAT_PARQUET:
-        return polygons_from_parquet(source.path, source.cells, source.columns)
+        return polygons_from_parquet(source.path, source.cells, source.columns, source.categories)
     return polygons_from_labels(source.path, simplify=source.simplify, progress=progress)
 
 
@@ -134,10 +137,10 @@ def write_segment_layer(
     if zip_stores:
         zip_store(layer_dir / "tiles.zarr", remove_source=True)
 
-    feature_names = numeric_feature_names(polygons.features)
+    names = feature_names(polygons.features)
     color_by = next(
-        (n for n in PREFERRED_COLOR_BY if n in feature_names),
-        feature_names[0] if feature_names else None,
+        (n for n in PREFERRED_COLOR_BY if n in names),
+        names[0] if names else None,
     )
     progress(
         f"  wrote segments/{layer_id}  {stats['n_cells']} objects, {stats['n_vertices']} vertices, "

@@ -58,7 +58,7 @@ from cytos.core.slide import SLIDE_SUFFIX, load_slide
 from cytos.core.image import load_pyramid_levels, select_level
 from cytos.core.session import DEFAULT_SESSION_NAME, load_session, save_session
 from cytos.core.points import load_point_tile_grid
-from cytos.core.polygons import load_polygon_tile_grid, numeric_feature_names
+from cytos.core.polygons import load_polygon_tile_grid, feature_names
 from cytos.render.camera import effective_camera_view_size
 from cytos.render.image import COMPOSITE_COLORMAPS, TileCache
 from cytos.render.points import PointTileCache
@@ -498,16 +498,16 @@ def build_window(
         image_layers.append((layer, ch))
         layer_meta[f"image:{layer.id}"] = {"path": str(layer.path)}
 
-    # (layer, grid, cache, numeric feature names) per segment layer in the
+    # (layer, grid, cache, colorable feature names) per segment layer in the
     # slide. File > Add Segments… appends to this list at runtime, so the
     # per-layer build is a function rather than a loop body.
     segment_layers = []
 
     def build_segment_layer(layer):
         grid = load_polygon_tile_grid(layer, slide.world_bounds)
-        feature_names = numeric_feature_names(grid.features)
+        names = feature_names(grid.features)
         # The manifest's choice, unless the feature table can't back it.
-        color_by = layer.color_by if layer.color_by in feature_names else None
+        color_by = layer.color_by if layer.color_by in names else None
         cache = PolygonTileCache(
             grid,
             max_tiles=max_tiles,
@@ -519,13 +519,13 @@ def build_window(
         )
         cache.group.visible = layer.visible
         scene.add(cache.group)
-        segment_layers.append((layer, grid, cache, feature_names))
+        segment_layers.append((layer, grid, cache, names))
         layer_meta[f"segments:{layer.id}"] = {"n_objects": int(grid.n_cells)}
         print(
             f"segments '{layer.id}': {grid.n_cells} objects, {len(grid.tiles)} tiles, "
             f"colormap={layer.colormap} color_by={color_by or 'flat'}"
         )
-        return grid, cache, feature_names
+        return grid, cache, names
 
     for layer in slide.segments:
         build_segment_layer(layer)
@@ -690,8 +690,8 @@ def build_window(
         segment_rows.append((layer, feature_names, segment_row))
         return segment_row
 
-    for layer, _grid, cache, feature_names in segment_layers:
-        add_segment_row(layer, cache, feature_names)
+    for layer, _grid, cache, layer_features in segment_layers:
+        add_segment_row(layer, cache, layer_features)
     segments_section.setEnabled(bool(segment_layers))
 
     if point_layers:
@@ -873,8 +873,8 @@ def build_window(
             if layer.id in known:
                 continue
             slide.segments.append(layer)
-            _grid, cache, feature_names = build_segment_layer(layer)
-            add_segment_row(layer, cache, feature_names)
+            _grid, cache, layer_features = build_segment_layer(layer)
+            add_segment_row(layer, cache, layer_features)
             defaults[f"segments:{layer.id}"] = _capture(layer, "segments")
             segment_visibility[layer.id] = layer.visible
             cache.group.visible = layer.visible and segments_section.is_checked()
@@ -1033,8 +1033,8 @@ def build_window(
             _restore(layer, kind, defaults[key])
         for layer, ch, row in image_rows:
             row.apply(layer.colormap, layer.visible, layer.clim or ch.cache.clim)
-        for layer, feature_names, row in segment_rows:
-            color_by = layer.color_by if layer.color_by in feature_names else None
+        for layer, layer_features, row in segment_rows:
+            color_by = layer.color_by if layer.color_by in layer_features else None
             row.apply(
                 layer.colormap, color_by, layer.show_outline, layer.show_fill, layer.fill_opacity, layer.visible
             )

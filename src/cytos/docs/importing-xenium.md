@@ -79,7 +79,11 @@ non-Xenium sources get one too.
 
 `analysis.tar.gz` → `analysis/clustering/*/clusters.csv`, two columns:
 `Barcode,Cluster` — the cell id and a 1-based integer; unassigned cells are
-simply absent *(verified)*. This is what categorical color-by will join on.
+simply absent *(verified)*. `cytos-import` joins every clustering it finds
+onto the segment layers' feature tables as columns marked categorical in
+the schema — `cluster` for `gene_expression_graphclust`, `kmeans_2` …
+`kmeans_10` for the fixed-k ones — so they appear in "Color by" and draw
+with a qualitative palette (see `cytos.core.polygons.join_categories`).
 Separately, Explorer's [custom cell-groups import](https://www.10xgenomics.com/analysis-guides/importing-customized-clustering-into-xenium-explorer)
 format (`cell_id, group[, color]` CSV) is a shape users already have files
 in — worth accepting verbatim if cytos grows an add-features path.

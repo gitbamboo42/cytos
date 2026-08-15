@@ -36,9 +36,10 @@ from dataclasses import dataclass
 import numpy as np
 import pygfx as gfx
 
-from cytos.core.polygons import PolygonTileGrid, visible_polygon_tile_keys
+from cytos.core.polygons import PolygonTileGrid, is_categorical_feature, visible_polygon_tile_keys
 from cytos.render.image import colormap_lut_array
 from cytos.render.lut import IdColorLut
+from cytos.render.points import palette_array
 
 # Both layers sit just in front of the image tiles (z=0) so neither depends on
 # scene insertion order to land on top, and the outline sits in front of its
@@ -79,6 +80,29 @@ def feature_colors(values: np.ndarray, colormap: str) -> np.ndarray:
     norm = np.zeros(len(v), dtype=np.float64)
     norm[finite] = np.clip((v[finite] - lo) / (hi - lo), 0.0, 1.0)
     return lut[(norm * 255).astype(np.uint8)]
+
+
+# Categorical features (a clustering, not a measurement) get a qualitative
+# palette, not a ramp: a ramp's order would imply cluster 7 is "more" than
+# cluster 2. tab20 because clusterings regularly exceed ten categories and
+# here the palette only separates neighbours, the same reason the point
+# layer allows it for many-gene views. Colour comes straight from the
+# category number, so a category keeps its colour across layers, slides
+# and sessions.
+_CATEGORY_PALETTE = "tab20"
+# Unassigned (null) objects: dim gray, visible but clearly not a category.
+_UNASSIGNED_RGBA = (0.45, 0.45, 0.45, 1.0)
+
+
+def category_colors(values: np.ndarray) -> np.ndarray:
+    """(n, 4) float32 RGBA for categorical features: `values` is the
+    per-cell category number as float, NaN where a cell is unassigned."""
+    pal = palette_array(_CATEGORY_PALETTE)
+    colors = np.empty((len(values), 4), dtype=np.float32)
+    colors[:] = _UNASSIGNED_RGBA
+    assigned = np.isfinite(values)
+    colors[assigned] = pal[values[assigned].astype(np.int64) % len(pal)]
+    return colors
 
 
 def flat_colors(n: int, colormap: str) -> np.ndarray:
@@ -151,7 +175,12 @@ class PolygonTileCache:
         features = self.grid.features
         if self.color_by is not None and features is not None and self.color_by in features.column_names:
             values = features.column(self.color_by).to_numpy(zero_copy_only=False).astype(np.float64)
-            self.set_colors(feature_colors(values, self.colormap))
+            if is_categorical_feature(features.schema.field(self.color_by)):
+                # Marked categorical at import (see cytos.core.polygons.
+                # join_categories): palette, not ramp -- no name matching.
+                self.set_colors(category_colors(values))
+            else:
+                self.set_colors(feature_colors(values, self.colormap))
         else:
             self.set_colors(flat_colors(n, self.colormap))
 

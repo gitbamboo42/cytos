@@ -67,6 +67,8 @@ are rejected with the legal list in the error message.
 Only the fields you give change. Notes that will save you a retry:
 
 - `color_by: null` means flat color; the feature names come from `describe`.
+  Categorical features (clusterings like `cluster`, `kmeans_5`) draw with a
+  qualitative palette — the `colormap` only affects numeric features.
 - `genes` accepts names or ids; `null` means all genes. Point layers have no
   per-layer `visible` — turn the whole `points` section on/off instead
   (`"sections": {"points": {"checked": true}}`).
