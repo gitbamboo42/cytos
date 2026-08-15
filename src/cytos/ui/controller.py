@@ -23,6 +23,7 @@ import numpy as np
 
 from cytos.remote.ipc import CommandError
 from cytos.render.camera import effective_camera_view_size
+from cytos.render.image import CHANNEL_COLOR_PRESETS, CHANNEL_RAMP_CHOICES
 from cytos.render.points import COLOR_MODE_FLAT, COLOR_MODE_GENE
 from cytos.ui.segment_panel import FLAT_COLOR_LABEL
 
@@ -54,6 +55,28 @@ def _check_fields(partial: dict, allowed: set[str], key: str) -> None:
         )
 
 
+def _check_hex_color(value) -> None:
+    v = str(value)
+    if not (len(v) == 7 and v[0] == "#" and all(c in "0123456789abcdefABCDEF" for c in v[1:])):
+        raise CommandError(f"'{value}' is not a color — use \"#rrggbb\"")
+
+
+def _check_channel_color(value) -> None:
+    """An image channel's `colormap` is a color: any "#rrggbb", or a legacy
+    colormap name a saved session may still carry."""
+    v = str(value)
+    if len(v) == 7 and v[0] == "#" and all(c in "0123456789abcdefABCDEF" for c in v[1:]):
+        return
+    import plotlet
+
+    if v in plotlet.list_colormaps():
+        return
+    raise CommandError(
+        f"'{value}' is not a channel color — use \"#rrggbb\" "
+        f"(presets: {', '.join(h for _n, h in CHANNEL_COLOR_PRESETS)})"
+    )
+
+
 def _check_categorical_feature(feature: str, categorical: dict) -> None:
     if feature not in categorical:
         raise CommandError(
@@ -82,10 +105,8 @@ def _check_category_colors(value, categorical: dict) -> dict:
         checked[feature] = {}
         for category, hex_color in colors.items():
             key = _check_category_key(category, feature, categorical)
-            h = str(hex_color)
-            if not (len(h) == 7 and h[0] == "#" and all(c in "0123456789abcdefABCDEF" for c in h[1:])):
-                raise CommandError(f"'{hex_color}' is not a color — use \"#rrggbb\"")
-            checked[feature][key] = h.lower()
+            _check_hex_color(hex_color)
+            checked[feature][key] = str(hex_color).lower()
     return checked
 
 
@@ -124,6 +145,7 @@ class WindowController:
         sections,
         layer_meta,
         panel=None,
+        custom_colors=None,
     ):
         self.win = win
         self.slide = slide
@@ -146,6 +168,9 @@ class WindowController:
         self.layer_meta = layer_meta
         # The dock panel widget, for snapshot(target="panel").
         self.panel = panel
+        # The window's shared pool of user-created colors (session field
+        # `custom_colors`), settable like everything else session-shaped.
+        self.custom_colors = custom_colors
 
     # -- reading -----------------------------------------------------------
 
@@ -176,7 +201,10 @@ class WindowController:
             layers[key] = {
                 "kind": "image",
                 "state": row.state(),
-                "colormaps": _combo_items(row.cmap_combo),
+                # `colormap` takes any "#rrggbb" (the panel's presets below)
+                # or one of the ramp colormap names.
+                "colors": [h for _n, h in CHANNEL_COLOR_PRESETS],
+                "colormaps": CHANNEL_RAMP_CHOICES,
                 **self.layer_meta.get(key, {}),
             }
         for layer, feature_names, row in self.segment_rows:
@@ -245,9 +273,16 @@ class WindowController:
         """Apply a partial, session-shaped dict: any of `camera`, `sections`,
         `layers` — each layer entry itself partial, merged over what the row
         currently shows. Returns the resulting state."""
-        _check_fields(changes, {"camera", "sections", "layers"}, "set")
+        _check_fields(changes, {"camera", "sections", "layers", "custom_colors"}, "set")
         if "camera" in changes:
             self.set_camera(changes["camera"])
+        if "custom_colors" in changes:
+            value = changes["custom_colors"]
+            if not isinstance(value, (list, tuple)):
+                raise CommandError('custom_colors must be a list like ["#ff8000"]')
+            for c in value:
+                _check_hex_color(c)
+            self.custom_colors.set([str(c) for c in value])
         for name, partial in changes.get("sections", {}).items():
             section = self.sections.get(name)
             if section is None:
@@ -298,7 +333,7 @@ class WindowController:
                 if f"image:{layer.id}" == key:
                     s = {**row.state(), **partial}
                     if "colormap" in partial:
-                        _check_choice(s["colormap"], row.cmap_combo, "colormap")
+                        _check_channel_color(s["colormap"])
                     row.apply(s["colormap"], bool(s["visible"]), tuple(s["clim"]))
                     return
         elif kind == "segments":

@@ -56,7 +56,7 @@ are rejected with the legal list in the error message.
   "camera":   {"center": [3800, 2600], "width": 500},
   "sections": {"points": {"checked": true}},
   "layers": {
-    "image:dapi":         {"colormap": "green", "clim": [0, 40], "visible": false},
+    "image:dapi":         {"colormap": "#00ff00", "clim": [0, 40], "visible": false},
     "segments:cell":      {"show_fill": true, "fill_opacity": 0.5,
                            "colormap": "magma", "color_by": "transcript_counts"},
     "points:transcripts": {"genes": ["ACTA2", "ACKR1"], "size": 6}
@@ -66,6 +66,12 @@ are rejected with the legal list in the error message.
 
 Only the fields you give change. Notes that will save you a retry:
 
+- An image channel's `colormap` is usually a *color*: any `"#rrggbb"` (it
+  renders as a black→color ramp; presets under `colors` in `describe`), or
+  one of the ramp colormaps under `colormaps` ("gray", "viridis", …).
+- The session's top-level `custom_colors` is the window's pool of
+  user-created colors, shared by every color picker — settable like
+  everything else: `{"custom_colors": ["#ff8000", "#1a2b3c"]}`.
 - `color_by: null` means flat color; the feature names come from `describe`.
   Categorical features (clusterings like `cluster`, `kmeans_5`) draw with a
   qualitative palette, not the `colormap`: pick it with `palette`, recolor
@@ -121,7 +127,7 @@ camera first. What you see is what picks: a shown segment layer answers
 anywhere inside a cell, fill or no fill; hidden layers, categories, and
 unselected genes return `hit: false`; where things overlap, the topmost
 drawn one answers (a dot over a cell, a nucleus over a cell). (In the app,
-the same answer follows the mouse in the status bar.)
+the same answer follows the mouse as a small floating box.)
 
 ## Sessions and politeness
 

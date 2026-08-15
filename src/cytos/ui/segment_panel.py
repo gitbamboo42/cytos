@@ -31,6 +31,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from cytos.render.points import CURATED_PALETTES, hex_to_rgba, palette_array
 from cytos.render.polygons import DEFAULT_CATEGORY_PALETTE, _UNASSIGNED_RGBA
+from cytos.ui.color_picker import CustomColors, open_color_popup
 from cytos.ui.colormap_combo import make_colormap_combo
 
 FLAT_COLOR_LABEL = "Flat color"
@@ -103,8 +104,12 @@ class SegmentRow(QtWidgets.QGroupBox):
         palette: str = DEFAULT_CATEGORY_PALETTE,
         category_colors: dict | None = None,
         hidden_categories: dict | None = None,
+        custom_colors: CustomColors | None = None,
     ):
         super().__init__()
+        # The window's shared pool of user-created colors (see
+        # cytos.ui.color_picker); a private pool only in tests.
+        self._custom_colors = custom_colors if custom_colors is not None else CustomColors()
         # feature -> [(category key, cell count)], categorical features only.
         # Keys are strings ("7", or "unassigned") -- the same JSON-safe form
         # the session stores. Public: describe() lists it so a remote caller
@@ -348,19 +353,20 @@ class SegmentRow(QtWidgets.QGroupBox):
         feature = self._current_feature()
         if feature is None:
             return
-        current = self._category_color(feature, key)
-        r, g, b = (int(round(float(c) * 255)) for c in current[:3])
-        picked = QtWidgets.QColorDialog.getColor(
-            QtGui.QColor(r, g, b),
-            self,
-            f"{feature}: {'Unassigned' if key == UNASSIGNED_KEY else key}",
+        swatch = next(s for k, _check, s in self._category_rows if k == key)
+        current = _rgba_to_hex(self._category_color(feature, key))
+        # The shared picker: same presets and the same session-saved custom
+        # colors as the image channels — no ramps, a category is one color.
+        open_color_popup(
+            swatch, current, self._custom_colors, include_ramps=False,
+            on_pick=lambda v, f=feature, k=key: self._set_category_color(f, k, v),
         )
-        if not picked.isValid():
-            return
-        self._category_colors.setdefault(feature, {})[key] = picked.name()
+
+    def _set_category_color(self, feature: str, key: str, hex_color: str) -> None:
+        self._category_colors.setdefault(feature, {})[key] = hex_color
         for k, _check, swatch in self._category_rows:
             if k == key:
-                swatch.setStyleSheet(_swatch_style(picked.name()))
+                swatch.setStyleSheet(_swatch_style(hex_color))
         self.category_colors_changed.emit({f: dict(c) for f, c in self._category_colors.items()})
 
     def _on_reset_colors(self) -> None:

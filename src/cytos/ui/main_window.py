@@ -65,6 +65,7 @@ from cytos.render.image import COMPOSITE_COLORMAPS, TileCache
 from cytos.render.points import PointTileCache
 from cytos.render.polygons import PolygonTileCache
 from cytos.ui.channel_panel import Channel, ChannelRow
+from cytos.ui.color_picker import CustomColors
 from cytos.ui.collapsible_section import CollapsibleSection
 from cytos.ui.minimap import MinimapWidget, make_composite_thumbnail
 from cytos.ui.scale_bar import ScaleBarWidget, unit_abbrev
@@ -153,6 +154,40 @@ def _hover_cell_text(features, cell: int, color_by: str | None) -> str:
             shown = str(v)
         text += f" · {color_by}: {shown}"
     return text
+
+
+class _HoverInfo(QtWidgets.QLabel):
+    """Floating readout that follows the cursor over the canvas, showing what
+    the pick found (a cell, a transcript dot). A plain child QLabel, the same
+    overlay pattern as the scale bar; transparent to the mouse so it never
+    steals the events that position it."""
+
+    def __init__(self, canvas):
+        super().__init__(canvas)
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setStyleSheet(
+            "background-color: palette(base); color: palette(text);"
+            "border: 1px solid palette(mid); padding: 1px 6px; border-radius: 3px;"
+        )
+        self.hide()
+        # The one event a cursor-follower can't see for itself: the cursor
+        # leaving the canvas with the label still showing.
+        canvas.installEventFilter(self)
+
+    def eventFilter(self, obj, event):  # noqa: N802 - Qt spelling
+        if event.type() == QtCore.QEvent.Type.Leave:
+            self.hide()
+        return False
+
+    def show_at(self, x: float, y: float, text: str) -> None:
+        self.setText(text)
+        self.adjustSize()
+        parent = self.parentWidget()
+        px = min(int(x) + 14, parent.width() - self.width() - 2)
+        py = min(int(y) + 16, parent.height() - self.height() - 2)
+        self.move(max(px, 2), max(py, 2))
+        self.show()
+        self.raise_()
 
 
 # Every open window lives here. Qt does not own a top-level window on Python's
@@ -494,6 +529,10 @@ def build_window(
     # Snapshot the defaults *before* overriding, so "reset" has something real
     # to go back to (see cytos.core.session).
     session = load_session(slide.root, session_name)
+    # The window's shared pool of user-created colors: every picker (image
+    # channels, segment categories) offers the same customs, and the pool
+    # rides in the session like any other "make it pretty" state.
+    custom_colors = CustomColors(session.get("custom_colors", []))
     saved_layers = session.get("layers", {})
     defaults = {}
     for key, kind, layer in _iter_layers(slide):
@@ -735,6 +774,7 @@ def build_window(
             palette=layer.palette,
             category_colors=layer.category_colors,
             hidden_categories=layer.hidden_categories,
+            custom_colors=custom_colors,
         )
         segment_row.colormap_changed.connect(cache.set_colormap)
         segment_row.color_by_changed.connect(cache.set_color_by)
@@ -819,7 +859,7 @@ def build_window(
 
     def add_row(ch: Channel, visible: bool = True) -> ChannelRow:
         intensity_max = float(np.asarray(ch.levels[-1].data).max()) * 1.2
-        row = ChannelRow(ch, intensity_max, visible)
+        row = ChannelRow(ch, intensity_max, visible, custom_colors)
         row.clim_changed.connect(ch.cache.set_clim)
         row.clim_changed.connect(lambda *_: refresh_minimap())
         row.visibility_changed.connect(lambda v, c=ch: setattr(c.cache.group, "visible", v))
@@ -1087,6 +1127,7 @@ def build_window(
                 )
             },
             "layers": layers_state,
+            "custom_colors": list(custom_colors.colors),
         }
 
     def reset_to_defaults() -> None:
@@ -1111,6 +1152,7 @@ def build_window(
         images_section.apply(True, True)
         segments_section.apply(True, False)
         points_section.apply(False, False)
+        custom_colors.set([])
         fit_camera_to_slide()
         refresh_minimap()
         # The session file isn't deleted -- you named it, so it stays and is
@@ -1248,7 +1290,7 @@ def build_window(
                 return layer, name, gene, count
         return None
 
-    hover_last = [""]
+    hover_info = _HoverInfo(render_widget)
 
     def on_pointer_move(event):
         rect = latest_world_rect[0]
@@ -1257,22 +1299,23 @@ def build_window(
             return
         wx = rect[0] + (event.x / logical_w) * (rect[2] - rect[0])
         wy = rect[1] + (event.y / logical_h) * (rect[3] - rect[1])
-        parts = [f"{wx:.1f}, {wy:.1f} {units_label}"]
+        win.statusBar().showMessage(f"{wx:.1f}, {wy:.1f} {units_label}")
         # One pick, one owner: a dot is drawn on top of the cell it sits in,
         # so on a dot the gene answers, next to it the cell does.
+        text = None
         pt = point_from_pick_info(event.pick_info)
         if pt is not None:
             _layer, name, _gene, count = pt
-            parts.append(name if count is None else f"{name} ×{count}")
+            text = name if count is None else f"{name} ×{count}"
         else:
             hit = cell_from_pick_info(event.pick_info)
             if hit is not None:
                 _layer, grid, cache, cell = hit
-                parts.append(_hover_cell_text(grid.features, cell, cache.color_by))
-        text = "    ".join(parts)
-        if text != hover_last[0]:
-            hover_last[0] = text
-            win.statusBar().showMessage(text)
+                text = _hover_cell_text(grid.features, cell, cache.color_by)
+        if text is None:
+            hover_info.hide()
+        else:
+            hover_info.show_at(event.x, event.y, text)
 
     renderer.add_event_handler(on_pointer_move, "pointer_move")
     # Created now, not on first hover: statusBar() conjures the bar into the
@@ -1349,6 +1392,7 @@ def build_window(
         },
         layer_meta=layer_meta,
         panel=dock,
+        custom_colors=custom_colors,
     )
 
     render_widget.request_draw(animate)

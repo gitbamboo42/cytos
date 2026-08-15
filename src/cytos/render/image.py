@@ -40,6 +40,48 @@ for _name, _hex in _COMPOSITE_HUES.items():
 # newly loaded channel by cycling through them.
 COMPOSITE_COLORMAPS = list(_COMPOSITE_HUES.keys())
 
+# The channel color picker's presets, (name, "#rrggbb") pairs: the classic
+# fluorescence six first, then white, then the rest of the 30-degree hue
+# wheel plus gray. A channel's `colormap` value may also be any "#rrggbb"
+# of the user's own.
+CHANNEL_COLOR_PRESETS = [
+    ("Blue", "#0000ff"),
+    ("Green", "#00ff00"),
+    ("Red", "#ff0000"),
+    ("Cyan", "#00ffff"),
+    ("Magenta", "#ff00ff"),
+    ("Yellow", "#ffff00"),
+    ("White", "#ffffff"),
+    ("Orange", "#ff8000"),
+    ("Chartreuse", "#80ff00"),
+    ("Spring green", "#00ff80"),
+    ("Azure", "#0080ff"),
+    ("Purple", "#8000ff"),
+    ("Rose", "#ff0080"),
+    ("Gray", "#808080"),
+]
+
+
+def normalize_channel_color(value: str) -> str:
+    """A channel's `colormap` value, canonicalised: "#rrggbb" lowercased, a
+    black->hue name replaced by its hex (they are the same ramp), any other
+    colormap name kept as-is."""
+    if value.startswith("#"):
+        return value.lower()
+    return _COMPOSITE_HUES.get(value, value)
+
+
+def channel_color_hex(value: str) -> str:
+    """The single color a channel's `colormap` value stands for — a "#rrggbb"
+    as itself, a black->hue name as its hue, any other colormap as its top
+    color. What seeds the custom color dialog."""
+    if value.startswith("#"):
+        return value.lower()
+    if value in _COMPOSITE_HUES:
+        return _COMPOSITE_HUES[value]
+    top = colormap_lut_array(value)[-1, :3]
+    return "#" + "".join(f"{int(round(float(c) * 255)):02x}" for c in top)
+
 # Curated defaults for the channel colormap picker: the black->hue composite
 # set above (plus plotlet's built-in "gray", already black->white) first,
 # since composite fluorescence display is cytos's primary use case, then a
@@ -56,12 +98,23 @@ CURATED_COLORMAPS = [
     "cividis",
 ]
 
+# The picker's ramp section: real colormaps a channel may use instead of a
+# color — the curated perceptual set, i.e. everything curated that isn't
+# just a black->hue ramp (those are the preset *colors*).
+CHANNEL_RAMP_CHOICES = [n for n in CURATED_COLORMAPS if n not in _COMPOSITE_HUES]
+
 
 def colormap_lut_array(name: str) -> np.ndarray:
-    """(256, 4) float32 RGBA in [0, 1] for a named plotlet colormap — the same
-    array backs both the GPU texture here and the CPU minimap thumbnail
-    (`cytos.ui.minimap`), so both read one LUT, not two independently-tinted
-    ramps that could drift apart."""
+    """(256, 4) float32 RGBA in [0, 1] for a named plotlet colormap, or the
+    black->color ramp of a "#rrggbb" — the same array backs both the GPU
+    texture here and the CPU minimap thumbnail (`cytos.ui.minimap`), so both
+    read one LUT, not two independently-tinted ramps that could drift
+    apart."""
+    if name.startswith("#"):
+        color = np.array([int(name[i : i + 2], 16) for i in (1, 3, 5)], dtype=np.float32) / 255.0
+        lut = np.ones((256, 4), dtype=np.float32)
+        lut[:, :3] = np.linspace(0.0, 1.0, 256, dtype=np.float32)[:, None] * color
+        return lut
     raw = plotlet.draw.colormap_lut(name)  # 768 bytes: 256 RGB uint8 triples
     rgb = np.frombuffer(raw, dtype=np.uint8).reshape(256, 3).astype(np.float32) / 255.0
     lut = np.ones((256, 4), dtype=np.float32)
