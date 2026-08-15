@@ -35,17 +35,37 @@ class SegmentRow(QtWidgets.QGroupBox):
         fill_opacity: float,
         visible: bool = True,
     ):
-        super().__init__(title)
-        layout = QtWidgets.QFormLayout(self)
+        super().__init__()
+        outer = QtWidgets.QVBoxLayout(self)
 
-        # A slide can hold several segment layers (cell and nucleus
-        # boundaries, say), so each needs its own on/off -- the section
-        # checkbox above is the master for all of them, the way ChannelRow
-        # sits under the Images section.
-        self.visible_check = QtWidgets.QCheckBox("Visible")
+        # A slide can hold several segment layers -- cell and nucleus to
+        # start with, and File > Add Segments... appends more -- so each row
+        # folds like the sections do. The whole header is two things: the
+        # fold arrow, and one checkbox whose label *is* the layer name --
+        # "[x] Cell" both names the layer and switches it, the way napari's
+        # layer list reads, instead of a title plus a separate "Visible"
+        # row.
+        header = QtWidgets.QWidget()
+        header_layout = QtWidgets.QHBoxLayout(header)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        self._fold_button = QtWidgets.QToolButton()
+        self._fold_button.setCheckable(True)
+        self._fold_button.setChecked(True)
+        self._fold_button.setArrowType(QtCore.Qt.ArrowType.DownArrow)
+        self._fold_button.setStyleSheet("QToolButton { border: none; }")
+        self._fold_button.toggled.connect(self._on_fold)
+        self.visible_check = QtWidgets.QCheckBox(title)
         self.visible_check.setChecked(visible)
         self.visible_check.toggled.connect(self.visibility_changed)
-        layout.addRow(self.visible_check)
+        header_layout.addWidget(self._fold_button)
+        header_layout.addWidget(self.visible_check)
+        header_layout.addStretch()
+        outer.addWidget(header)
+
+        self._content = QtWidgets.QWidget()
+        layout = QtWidgets.QFormLayout(self._content)
+        layout.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(self._content)
 
         self.cmap_combo = make_colormap_combo(colormap)
         self.cmap_combo.currentTextChanged.connect(self.colormap_changed)
@@ -82,6 +102,12 @@ class SegmentRow(QtWidgets.QGroupBox):
         self.opacity_spin.valueChanged.connect(self.fill_opacity_changed)
         layout.addRow("Fill opacity", self.opacity_spin)
         self._sync_opacity_enabled(show_fill)
+
+    def _on_fold(self, expanded: bool) -> None:
+        self._fold_button.setArrowType(
+            QtCore.Qt.ArrowType.DownArrow if expanded else QtCore.Qt.ArrowType.RightArrow
+        )
+        self._content.setVisible(expanded)
 
     def state(self) -> dict:
         """What this row currently shows. Mirrors `apply`."""
