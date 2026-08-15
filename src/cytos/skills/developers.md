@@ -153,6 +153,16 @@ command surface; the guide does. When a command, field, or convention
 changes, update the guide in the same change — it is the interface contract
 an AI reads, and a stale one teaches wrong commands.
 
+## Developing the panel
+
+`cytos-ctl snapshot --panel` (MCP: `snapshot` with `panel=true`) captures
+the dock via `QWidget.grab` — check UI changes with your own eyes; never
+make the human referee pixels. Offscreen widget tests verify logic, not
+looks. Keep the Fusion style (`_ensure_app`): native styles draw hidden
+padding their reported metrics don't match, differently per OS. Compose
+pixel-exact rows from plain widgets (the legend in `segment_panel.py`) —
+composite widgets like QTreeWidget bury their checkbox geometry.
+
 ## Implementation gotchas (verified against a real slide)
 
 Nothing here is about any one vendor's format — those facts live in
@@ -186,6 +196,13 @@ building the tool, stated so the guards in the code don't look removable.
   returns areas ~2% larger; area centroids agree to 0.05 um, a quarter of a
   pixel, with no directional bias — that round trip is the check to re-run if
   the pixel→world conversion is ever touched.
+- **Parquet silently drops Arrow's dictionary type**: write a
+  `dictionary<int>` column, read back plain `int64` — parquet sees the
+  dictionary as compression, not meaning. So a column's *type* cannot mark
+  it as categorical across a save/load. Categorical columns (clusterings)
+  carry the field metadata `cytos:categorical` instead, which parquet does
+  keep (`cytos.core.polygons.is_categorical_feature`); everything
+  downstream asks that marker, never a column-name pattern.
 - `mapbox_earcut`'s nanobind binding requires **C-contiguous** `(*, 2)
   float32` arrays — `pandas.DataFrame.to_numpy()` on multiple columns returns
   Fortran-order, which fails with an unhelpful generic `TypeError`. Fix:

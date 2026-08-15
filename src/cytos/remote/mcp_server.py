@@ -170,11 +170,23 @@ def set_camera(
 
 
 @server.tool()
-def snapshot(window: int | None = None) -> Image:
-    """Render the window's current view and return it as a PNG image."""
+def snapshot(window: int | None = None, panel: bool = False) -> Image:
+    """Render the window's current view and return it as a PNG image.
+
+    `panel=True` captures the dock panel (the app's own controls) instead of
+    the slide view — a developer's tool for checking UI work with your own
+    eyes, not a way to look at the data."""
     fd, path = tempfile.mkstemp(prefix="cytos-mcp-", suffix=".png")
     os.close(fd)
-    _call({"cmd": "snapshot", "window": window, "path": path}, timeout_ms=_SLOW_TIMEOUT_MS)
+    _call(
+        {
+            "cmd": "snapshot",
+            "window": window,
+            "path": path,
+            "target": "panel" if panel else "canvas",
+        },
+        timeout_ms=_SLOW_TIMEOUT_MS,
+    )
     data = Path(path).read_bytes()
     Path(path).unlink(missing_ok=True)
     return Image(data=data, format="png")

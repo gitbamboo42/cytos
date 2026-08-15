@@ -285,7 +285,7 @@ def prompt_new_slide(parent, max_tiles: int) -> bool:
         return False
     out_path = Path(saver.selectedFiles()[0])
 
-    QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+    _ensure_app()
     win = _MainWindow()
     win.max_tiles = max_tiles
     # The title it will keep once it's a viewer, so the window doesn't rename
@@ -575,7 +575,7 @@ def build_window(
             f"{len(grid.tiles)} tiles, color={layer.color_mode}"
         )
 
-    QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+    _ensure_app()
     # `win` is passed in when the window already exists and was showing an
     # import running into it -- the same window becomes the view, rather than
     # one closing and another appearing. It is already on screen and already in
@@ -1211,6 +1211,7 @@ def build_window(
             "points": points_section,
         },
         layer_meta=layer_meta,
+        panel=dock,
     )
 
     render_widget.request_draw(animate)
@@ -1329,7 +1330,7 @@ def _dispatch(payload: dict):
         path = payload.get("path")
         if not path:
             raise ipc.CommandError("snapshot needs a 'path' to write the PNG to")
-        return controller.snapshot(path)
+        return controller.snapshot(path, payload.get("target", "canvas"))
     if cmd == "reset":
         return controller.reset()
     if cmd == "save":
@@ -1387,6 +1388,20 @@ def _shutdown_gpu() -> None:
         poller.stop()
 
 
+def _ensure_app() -> QtWidgets.QApplication:
+    """The one QApplication, with the one style. Fusion, not the platform's
+    native style: native styles draw controls through the OS theme engine,
+    with hidden platform-specific padding that Qt's reported metrics don't
+    match -- pixel-level panel layout would need re-fighting on every OS.
+    Fusion is Qt drawing its own controls: the same pixels on macOS, Windows
+    and Linux, laid out once. napari makes the same choice."""
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        app = QtWidgets.QApplication(sys.argv)
+        app.setStyle("Fusion")
+    return app
+
+
 def main() -> None:
     global _MAX_TILES
     parser = argparse.ArgumentParser(description=__doc__)
@@ -1394,7 +1409,7 @@ def main() -> None:
     args = parser.parse_args()
     _MAX_TILES = args.max_tiles
 
-    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+    app = _ensure_app()
     if not _claim_single_instance():
         print("cytos is already running — bringing it to the front")
         return

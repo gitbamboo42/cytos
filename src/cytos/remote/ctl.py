@@ -116,6 +116,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("snapshot", help="render the current view and write it as a PNG")
     p.add_argument("out", help="where to write the PNG")
+    p.add_argument(
+        "--panel",
+        action="store_true",
+        help="capture the dock panel (the controls) instead of the slide view",
+    )
     window_arg(p)
 
     p = sub.add_parser("reset", help="reset a window to the slide's defaults")
@@ -167,6 +172,7 @@ def _payload(args: argparse.Namespace) -> tuple[dict, int]:
             "cmd": "snapshot",
             "window": args.window,
             "path": str(Path(args.out).expanduser().resolve()),
+            "target": "panel" if args.panel else "canvas",
         }, _SLOW_TIMEOUT_MS
     payload = {"cmd": cmd}
     if getattr(args, "window", None) is not None:

@@ -122,6 +122,7 @@ class WindowController:
         point_rows,
         sections,
         layer_meta,
+        panel=None,
     ):
         self.win = win
         self.slide = slide
@@ -141,6 +142,8 @@ class WindowController:
         self.point_rows = point_rows
         self.sections = sections
         self.layer_meta = layer_meta
+        # The dock panel widget, for snapshot(target="panel").
+        self.panel = panel
 
     # -- reading -----------------------------------------------------------
 
@@ -372,15 +375,32 @@ class WindowController:
 
     # -- actions -----------------------------------------------------------
 
-    def snapshot(self, path: str) -> dict:
+    def snapshot(self, path: str, target: str = "canvas") -> dict:
         """Render the current state and write it to `path` as a PNG.
 
-        `render_offscreen` draws a fresh frame right now — tile loads are
-        synchronous, and no window repaint is involved — so the PNG reflects
-        the command that just ran even if the window is hidden, occluded, or
-        hasn't had a paint event since the last change.
+        `target="canvas"` (the default) is the slide view: `render_offscreen`
+        draws a fresh frame right now — tile loads are synchronous, and no
+        window repaint is involved — so the PNG reflects the command that
+        just ran even if the window is hidden, occluded, or hasn't had a
+        paint event since the last change.
+
+        `target="panel"` grabs the dock panel widget instead — the controls,
+        not the picture. It exists so whoever is *building* the UI (an AI
+        assistant, usually) can look at their own work instead of asking the
+        human to referee pixels; `QWidget.grab` renders the widget tree
+        directly, so it works while the window is hidden too.
         """
         from PIL import Image
+
+        if target == "panel":
+            if self.panel is None:
+                raise CommandError("this window has no panel to snapshot")
+            pixmap = self.panel.grab()
+            if not pixmap.save(path, "PNG"):
+                raise CommandError(f"could not write {path}")
+            return {"path": path, "width": pixmap.width(), "height": pixmap.height()}
+        if target != "canvas":
+            raise CommandError(f"unknown snapshot target '{target}' — 'canvas' or 'panel'")
 
         self.render_offscreen()
         array = np.asarray(self.renderer.snapshot())
