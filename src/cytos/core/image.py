@@ -2,8 +2,8 @@
 tiling math. Pure numpy — no pygfx/GPU dependency, see `cytos.render.image` for
 that.
 
-Reuses OME-Zarr's own chunk grid as the tile grid (see work-notes/plan.md's open
-question on this) rather than inventing a second one.
+Reuses OME-Zarr's own chunk grid as the tile grid rather than inventing a
+second one.
 """
 
 from __future__ import annotations

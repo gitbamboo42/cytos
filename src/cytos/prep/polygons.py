@@ -1,8 +1,8 @@
 """Offline preprocessing for the polygon layer: triangulate every cell once,
 Hilbert-sort so spatially-close cells become memory-close, tile into the
-slide's shared world-space grid, write to a zarr cache. See
-work-notes/plan.md Phase 2 -- this is the precomputation that buys the
-renderer its speed; napari triangulates inside add_shapes() instead.
+slide's shared world-space grid, write to a zarr cache. This is the
+precomputation that buys the renderer its speed; napari triangulates inside
+add_shapes() instead.
 
 Tiling reuses the Hilbert curve itself rather than a separate quadtree
 structure: a curve of `order` bits per axis visits every order-L quadrant as
@@ -105,7 +105,7 @@ def prep_polygons(
     tri_group_id = np.repeat(np.arange(n_cells), new_tricounts)
     global_tri_idx = new_tri_local.astype(np.int64) + new_offsets[:-1][tri_group_id]
     # Dense post-sort cell id, per vertex -- what the renderer's per-vertex
-    # LUT lookup (Phase 3) indexes a global color texture by.
+    # LUT lookup indexes a global color texture by.
     vertex_cell_id = np.repeat(np.arange(n_cells), new_vcounts).astype(np.uint32)
 
     tile_key = tile_row * (1 << tile_depth) + tile_col

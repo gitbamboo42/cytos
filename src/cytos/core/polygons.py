@@ -1,6 +1,6 @@
 """Cell segmentation polygon data model: ragged-array boundary geometry plus
 per-cell attributes. Pure numpy/pyarrow -- no pygfx/GPU dependency, see
-cytos.render for that (work-notes/plan.md Phase 1).
+cytos.render for that.
 
 Raw vertex coordinates are already in the same world space as
 cytos.core.image's PyramidLevel (world Y increasing downward, matching pixel
@@ -36,7 +36,7 @@ from cytos.core.tiling import tile_world_size, visible_tile_keys
 class Polygons:
     coords: np.ndarray  # (M, 2) float32, world space, C-contiguous
     offsets: np.ndarray  # (N+1,) uint32 -- polygon i = coords[offsets[i]:offsets[i+1]]
-    cell_id: np.ndarray  # (N,) uint32, dense 0..N-1 -- GPU vertex/LUT index (Phase 3)
+    cell_id: np.ndarray  # (N,) uint32, dense 0..N-1 -- GPU vertex/LUT index
     features: pa.Table  # per-cell attributes, row i matches cell_id[i]; always has "id"
 
 
@@ -231,7 +231,7 @@ class PolygonTile:
 class PolygonTileGrid:
     """A `cytos.prep.polygons` cache: triangulated, Hilbert-sorted polygon
     tiles at a single flat-grid depth (see that module for why one depth is
-    enough -- coarse zoom gets a raster stand-in instead, Phase 2/3). Reading
+    enough -- coarse zoom gets a raster stand-in instead). Reading
     a tile is a cheap array read, not a re-triangulation.
 
     `features` is the cache's per-cell attribute table, already permuted into
