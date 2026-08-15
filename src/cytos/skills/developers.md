@@ -32,10 +32,12 @@ from `_vispy/` (rendering backend) from `_qt/` (UI): `core/` (pure data model,
 no GPU/UI imports), `prep/` (offline preprocessing), `render/` (pygfx scene
 construction), `remote/` (control socket, `cytos-ctl`, MCP — no UI imports),
 `ui/` (Qt widgets only) — one-directional, each layer importable without the
-ones "above" it. Two more places carry the outward face: `cli.py` at the
-root (the one place listing every console script) and `skills/` (the
+ones "above" it. Three more places carry the outward face: `cli.py` at the
+root (the one place listing every console script), `skills/` (the
 shipped AI guides plus the `guide_text()` that serves them to `cytos-ctl
-skill` and the MCP `usage_guide` tool).
+skill` and the MCP `usage_guide` tool), and `docs/` (what cytos does to
+read each third-party data source, one `importing-<source>.md` per source —
+see below).
 
 `tools/make_synthetic_big_pyramid.py` and `tools/make_label_mask.py` stay
 outside the package, deliberately: dev-only generators, no end user needs
@@ -55,12 +57,17 @@ each folder's own contents for what's there.
 
 **Naming convention:** name loaders/converters after what they produce
 (`polygons_from_parquet`, `polygons_from_labels`, `load_ome_zarr_image`), never
-after the source platform (`load_xenium`) — Xenium is the first data source, not
-the only one.
+after the source platform (`load_xenium`) — today's data source is the first,
+not the only one. The same rule keeps this guide vendor-free: what cytos
+does to read a specific source — and the format facts that depends on —
+lives in `src/cytos/docs/importing-<source>.md`, committed and shipped in
+the package, so those facts never need re-finding; the source's own product
+documentation is linked from there, not rewritten. The gitignored
+`data/README.md` only records which datasets are on this machine.
 
 A polygon set has **two input formats, and nothing downstream knows which one a
 layer came from**: a long-format boundary table (`polygons_from_parquet`, one
-row per vertex — Xenium and most exports), or an OME-Zarr **label mask** whose
+row per vertex — most platforms' exports), or an OME-Zarr **label mask** whose
 pixel values are object ids (`cytos.prep.labels.polygons_from_labels` — what
 Cellpose, StarDist and friends produce). Both land as the same `Polygons`, and
 `cytos.prep.segments` is the dispatcher that picks between them by looking at
@@ -148,9 +155,9 @@ an AI reads, and a stale one teaches wrong commands.
 
 ## Implementation gotchas (verified against a real slide)
 
-Input-data format facts (parquet layout, Xenium zarr schema, OME-TIFF vs.
-zarr) live in `data/README.md`, not here — these are code-level pitfalls hit
-while building the tool, not facts about the input data itself.
+Nothing here is about any one vendor's format — those facts live in
+`src/cytos/docs/`, per vendor. These are code-level pitfalls hit while
+building the tool, stated so the guards in the code don't look removable.
 
 - **`ome_zarr.writer.write_image` cannot write a label mask.** It ignores the
   `coordinate_transformations` passed to it (writing unit scale and zero
@@ -171,7 +178,8 @@ while building the tool, not facts about the input data itself.
   is the point of never holding the whole mask.
 - **Marching-squares rings need simplifying, and land half a pixel out.**
   `find_contours` emits about one vertex per pixel step, so a 30 px cell
-  arrives with ~120 vertices where Xenium ships ~25 — vertex count is what the
+  arrives with ~120 vertices where a platform's own boundary table ships
+  ~25 — vertex count is what the
   tile store, the GPU buffers and the earcut loop all scale with. Douglas-Peucker
   at 0.75 px is a default, not a polish step. The ring also sits on the outer
   pixel boundary, so a round trip (rasterize a segmentation, trace it back)
@@ -186,8 +194,8 @@ while building the tool, not facts about the input data itself.
   distribution** (DAPI test channel: median 0, 99th pct 30, max 1194). Raw
   min/max `clim` crushes the image to near-black. Use percentile-based
   autocontrast (1st/99.5th pct), matching napari/Fiji.
-- **World Y increases downward**, the same direction as pixel rows, as raw
-  Xenium coordinates, and as every neighbouring tool (napari, QuPath, Fiji,
+- **World Y increases downward**, the same direction as pixel rows, as the
+  source platforms' raw coordinates, and as every neighbouring tool (napari, QuPath, Fiji,
   XYZ map tiles). So nothing on the data path converts Y: image levels are a
   plain scale-and-offset (`PyramidLevel.row_to_world_y`), and polygon/point
   loaders read `vertex_y`/`y_location` straight through. World bounds are
@@ -214,14 +222,26 @@ while building the tool, not facts about the input data itself.
   `plotlet.register_colormap` at import time for this reason — don't default
   composite channels to a matplotlib sequential colormap without checking its
   0-end color first.
-- **Xenium `morphology_focus.ome.tif` doesn't always have a channel axis.**
-  Protein-panel datasets (e.g. `human_kidney_tiny/`) ship multi-channel
-  (`axes="CYX"`), but gene-only-panel datasets (e.g.
-  `xenium_breast_cancer_rep1/`) collapse to a single DAPI plane with
-  `axes="YX"` — no channel dimension at all. `series.asarray()[channel]`
-  silently mis-indexes that 2D array (grabs one *row*, not a channel plane)
-  instead of raising. `src/cytos/prep/pyramid.py` checks `series.axes` and
-  only indexes by channel when a channel axis actually exists.
+- **A single-channel OME-TIFF may have no channel axis at all.** Some
+  pipelines write `SizeC=1` as a plain 2D plane (`axes="YX"`) where their
+  multi-channel output is `axes="CYX"` (which versions do which:
+  `src/cytos/docs/`). `series.asarray()[channel]` silently mis-indexes the
+  2D case (grabs one *row*, not a channel plane) instead of raising.
+  `src/cytos/prep/pyramid.py` checks `series.axes` and only indexes by
+  channel when a channel axis actually exists.
+- **A multi-file OME-TIFF's sibling pages arrive with closed file handles.**
+  Newer morphology images are one OME-TIFF split across several files, one
+  per stain (which layouts exist per version: `src/cytos/docs/`); tifffile
+  assembles the whole `CYX` series from the first file, but parses the
+  sibling files once and closes them — reading a page that lives in one
+  later auto-reopens it with a `UserWarning`. `_read_plane` in
+  `src/cytos/prep/pyramid.py` reopens the handle on purpose instead. Same
+  path, two more lessons: read a channel via its *page* —
+  `series.asarray()[channel]` decodes every whole-slide plane to keep one —
+  and the decode needs `imagecodecs` (JPEG-2000), which is why that is a
+  real dependency. Discovery must know old and new layouts both: a glob for
+  only the old per-channel names finds nothing in a new bundle and imports
+  an image-less slide without complaint.
 
 ## Errors and warnings
 

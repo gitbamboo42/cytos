@@ -26,6 +26,9 @@ dependencies = [
     # the first code here that imports them directly.
     "scikit-image",
     "scipy",
+    # XOA 2.0 morphology images are JPEG-2000-compressed OME-TIFF; tifffile
+    # needs imagecodecs to decode them (cytos.prep.pyramid).
+    "imagecodecs",
 ]
 
 [project.optional-dependencies]

@@ -21,6 +21,7 @@ Usage (installed as a console script, see pyproject.toml [project.scripts]):
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import sys
 from dataclasses import dataclass
@@ -43,7 +44,7 @@ from cytos.core.points import DEFAULT_MIN_QV, load_transcripts
 from cytos.prep.archive import zip_store
 from cytos.prep.labels import DEFAULT_SIMPLIFY
 from cytos.prep.points import prep_points
-from cytos.prep.pyramid import convert_ome_zarr
+from cytos.prep.pyramid import convert_ome_zarr, ome_channel_names
 from cytos.prep.segments import (
     SegmentSource,
     check_fits_slide,
@@ -70,6 +71,15 @@ class _PointSource:
     transcripts: Path
 
 
+def _channel_layer_id(name: str, channel: int) -> str:
+    """A layer id from an OME channel name. Stain names arrive as marker
+    lists ("ATP1A1/CD45/E-Cadherin", "alphaSMA/Vimentin") — keep the words,
+    normalise everything between them to single underscores. The id names
+    files and session keys, so it has to be filesystem- and JSON-key-safe."""
+    slug = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+    return slug or f"ch{channel}"
+
+
 def _discover_xenium(source: Path) -> tuple[list[_ImageSource], list[SegmentSource], list[_PointSource]]:
     """What a Xenium output directory offers. Prefers an OME-Zarr already
     sitting next to the raw data over re-deriving one from the OME-TIFF -- the
@@ -84,7 +94,22 @@ def _discover_xenium(source: Path) -> tuple[list[_ImageSource], list[SegmentSour
     if not images:
         tif = source / "morphology_focus.ome.tif"
         focus_dir = source / "morphology_focus"
-        if tif.exists():
+        # XOA 2.0's multimodal layout: morphology_focus_0000.ome.tif ..
+        # _0003.ome.tif are one multi-file OME-TIFF, one file per stain
+        # channel. Open the first and tifffile assembles the whole series, so
+        # each channel becomes an _ImageSource with a channel *index* into
+        # that one series — unlike the pre-2.0 one-file-per-channel layout
+        # below, where the file itself is the channel.
+        multi = sorted(focus_dir.glob("morphology_focus_*.ome.tif")) if focus_dir.is_dir() else []
+        if multi:
+            names = ome_channel_names(multi[0])
+            # DAPI first, same rule as the zarr branch above: channels take
+            # their default colormap by position, and the nuclear stain
+            # should land on blue.
+            order = sorted(range(len(names)), key=lambda i: ("dapi" not in names[i].lower(), i))
+            for i in order:
+                images.append(_ImageSource(id=_channel_layer_id(names[i], i), path=multi[0], channel=i))
+        elif tif.exists():
             images.append(_ImageSource(id="morphology", path=tif))
         elif focus_dir.is_dir():
             for channel_tif in sorted(focus_dir.glob("ch*.ome.tif")):
