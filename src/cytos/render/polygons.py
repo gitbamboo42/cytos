@@ -343,6 +343,7 @@ class PolygonTileCache:
             map=self._lut.map,
             color_mode="vertex_map",
         )
+        material.alpha_mode = "blend"
         material.pick_write = True
         return gfx.Line(geometry, material)
 
