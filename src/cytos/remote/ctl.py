@@ -114,6 +114,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     window_arg(p)
 
+    p = sub.add_parser(
+        "pick",
+        help="which cell is at a world point (must be inside the current view)",
+    )
+    p.add_argument("x", type=float, help="world X")
+    p.add_argument("y", type=float, help="world Y (increasing downward)")
+    window_arg(p)
+
     p = sub.add_parser("snapshot", help="render the current view and write it as a PNG")
     p.add_argument("out", help="where to write the PNG")
     p.add_argument(
@@ -165,6 +173,8 @@ def _payload(args: argparse.Namespace) -> tuple[dict, int]:
         if not spec:
             sys.exit("cytos-ctl: camera needs at least one of --fit/--center/--width/--height/--rect")
         return {"cmd": "set", "window": args.window, "changes": {"camera": spec}}, _TIMEOUT_MS
+    if cmd == "pick":
+        return {"cmd": "pick", "window": args.window, "x": args.x, "y": args.y}, _TIMEOUT_MS
     if cmd == "snapshot":
         # The viewer writes the file, so the path must mean the same thing in
         # its working directory as in this one.

@@ -14,8 +14,7 @@ drawn over a large OME-Zarr morphology image. Dropping editability (unlike
 napari's Shapes layer) unlocks precomputation, immutable GPU buffers, and
 tiling — the same approach Xenium Explorer, deck.gl, and Mapbox use at this
 scale. Built on pygfx/wgpu directly, not a higher-level mapping library — see
-`work-notes/plan.md` for the full phased plan (data model, offline
-preprocessing, renderer, picking).
+`work-notes/plan.md` for the design rationale and roadmap.
 
 ## Project layout
 
@@ -230,6 +229,13 @@ building the tool, stated so the guards in the code don't look removable.
   those properties. Any world-space view rect derived from them directly is
   too narrow. Use `src/cytos/render/camera.py:effective_camera_view_size()`
   instead, everywhere a camera-driven view is needed.
+- **A switched-off polygon fill still renders, at opacity 0.** The fill mesh
+  doubles as the pick surface (`PolygonTileCache.pick_cell`); `visible=False`
+  would make cell interiors un-hoverable whenever only outlines show. pygfx
+  picks fully transparent meshes (verified). Related trap: an *opaque*
+  object drawn above a transparent one depth-culls it out of the pick
+  buffer — every layer above the polygon fill must keep
+  `alpha_mode="blend"` (no depth write) or picking under it dies.
 - **Sequential colormaps (matplotlib's `Blues`/`Greens`/`Reds`, vendored via
   `plotlet`) anchor at near-white, not black.** Additive-blended composite
   display (see the earlier fluorescence/autocontrast note) wants pixel value

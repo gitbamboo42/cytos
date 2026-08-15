@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import itertools
+import math
 import sys
 from importlib import metadata
 from pathlib import Path
@@ -120,6 +121,38 @@ def _categorical_info(features) -> dict[str, list[tuple[str, int]]]:
             entries.append(("unassigned", n_unassigned))
         info[f.name] = entries
     return info
+
+
+def _feature_row(features, cell: int) -> dict:
+    """One cell's whole attribute row as plain JSON values (None for nulls
+    and NaN) -- what the socket's `pick` returns."""
+    if features is None:
+        return {}
+    row = {}
+    for name in features.column_names:
+        v = features.column(name)[cell].as_py()
+        if isinstance(v, float) and math.isnan(v):
+            v = None
+        row[name] = v
+    return row
+
+
+def _hover_cell_text(features, cell: int, color_by: str | None) -> str:
+    """The status-bar readout for one hovered cell: its dataset id, plus the
+    value currently driving its color -- the number the user is looking at."""
+    if features is None:
+        return f"cell {cell}"
+    text = f"cell {features.column('id')[cell].as_py()}"
+    if color_by and color_by in features.column_names:
+        v = features.column(color_by)[cell].as_py()
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            shown = "unassigned"
+        elif isinstance(v, float):
+            shown = f"{v:.4g}"
+        else:
+            shown = str(v)
+        text += f" · {color_by}: {shown}"
+    return text
 
 
 # Every open window lives here. Qt does not own a top-level window on Python's
@@ -1164,9 +1197,14 @@ def build_window(
         Snapshots must reflect the command that just ran, and the canvas
         can't promise that: Qt doesn't repaint a hidden or fully occluded
         window, and macOS throttles ones nobody can see. flush=False skips
-        only the blit-to-canvas step, so nothing here needs a paint event."""
+        only the blit-to-canvas step, so nothing here needs a paint event —
+        but skipping flush also skips pygfx's clear-on-first-render-after-
+        flush bookkeeping, so clear=True must be explicit or back-to-back
+        offscreen renders draw onto the *previous* frame: an object that
+        stopped drawing (a hidden fill) would leave its stale pixels — and
+        stale pick-buffer ids — behind."""
         update_scene()
-        renderer.render(scene, camera, flush=False)
+        renderer.render(scene, camera, flush=False, clear=True)
 
     # Throttled to a fixed low rate, not the (uncapped) render loop — updating
     # Qt widgets every render frame caused visible layout thrash before (see
@@ -1187,6 +1225,104 @@ def build_window(
     stats_timer.timeout.connect(tick)
     stats_timer.start(100)
 
+    # -- picking -- pygfx already picks on every pointer event to route it
+    # (renderer.convert_event), so hover reads the event's own pick_info: no
+    # extra GPU readback, no spatial index. The polygon caches did the real
+    # work at tile-build time (see
+    # cytos.render.polygons.PolygonTileCache.pick_cell).
+
+    def cell_from_pick_info(pick_info):
+        for layer, grid, cache, _features in segment_layers:
+            cell = cache.pick_cell(pick_info)
+            if cell is not None:
+                return layer, grid, cache, cell
+        return None
+
+    def point_from_pick_info(pick_info):
+        for layer, grid, cache in point_layers:
+            got = cache.pick_point(pick_info)
+            if got is not None:
+                gene, count = got
+                names = grid.gene_names
+                name = names[gene] if 0 <= gene < len(names) else f"gene {gene}"
+                return layer, name, gene, count
+        return None
+
+    hover_last = [""]
+
+    def on_pointer_move(event):
+        rect = latest_world_rect[0]
+        logical_w, logical_h = render_widget.get_logical_size()
+        if not logical_w or not logical_h:
+            return
+        wx = rect[0] + (event.x / logical_w) * (rect[2] - rect[0])
+        wy = rect[1] + (event.y / logical_h) * (rect[3] - rect[1])
+        parts = [f"{wx:.1f}, {wy:.1f} {units_label}"]
+        # One pick, one owner: a dot is drawn on top of the cell it sits in,
+        # so on a dot the gene answers, next to it the cell does.
+        pt = point_from_pick_info(event.pick_info)
+        if pt is not None:
+            _layer, name, _gene, count = pt
+            parts.append(name if count is None else f"{name} ×{count}")
+        else:
+            hit = cell_from_pick_info(event.pick_info)
+            if hit is not None:
+                _layer, grid, cache, cell = hit
+                parts.append(_hover_cell_text(grid.features, cell, cache.color_by))
+        text = "    ".join(parts)
+        if text != hover_last[0]:
+            hover_last[0] = text
+            win.statusBar().showMessage(text)
+
+    renderer.add_event_handler(on_pointer_move, "pointer_move")
+    # Created now, not on first hover: statusBar() conjures the bar into the
+    # window layout, and it should be there before restoreGeometry's sizes
+    # are taken as final rather than appearing mid-session.
+    win.statusBar()
+
+    def pick_world(wx: float, wy: float) -> dict:
+        """The socket's `pick`: which cell is at world (wx, wy). Renders a
+        fresh frame first -- the pick buffer only covers what's on screen,
+        so the point must be inside the current view."""
+        render_offscreen()
+        rect = latest_world_rect[0]
+        if not (rect[0] <= wx <= rect[2] and rect[1] <= wy <= rect[3]):
+            raise ipc.CommandError(
+                f"({wx:g}, {wy:g}) is outside the current view "
+                f"[{rect[0]:.1f}, {rect[1]:.1f}, {rect[2]:.1f}, {rect[3]:.1f}] — "
+                "picking reads the rendered frame, so move the camera there first"
+            )
+        logical_w, logical_h = render_widget.get_logical_size()
+        sx = (wx - rect[0]) / (rect[2] - rect[0]) * logical_w
+        sy = (wy - rect[1]) / (rect[3] - rect[1]) * logical_h
+        info = renderer.get_pick_info((sx, sy))
+        pt = point_from_pick_info(info)
+        if pt is not None:
+            layer, name, gene, count = pt
+            return {
+                "x": wx,
+                "y": wy,
+                "hit": True,
+                "layer": f"points:{layer.id}",
+                "gene": name,
+                "gene_id": gene,
+                # None at full detail (the dot is one transcript); on an
+                # aggregate level, how many transcripts the dot stands for.
+                "count": count,
+            }
+        hit = cell_from_pick_info(info)
+        if hit is None:
+            return {"x": wx, "y": wy, "hit": False}
+        layer, grid, _cache, cell = hit
+        return {
+            "x": wx,
+            "y": wy,
+            "hit": True,
+            "layer": f"segments:{layer.id}",
+            "cell_index": cell,
+            "features": _feature_row(grid.features, cell),
+        }
+
     # Everything the control socket can do to this window — built from the
     # same closures and row lists the menus use, so a remote command and a
     # mouse click are the same code path (see cytos.ui.controller).
@@ -1202,6 +1338,7 @@ def build_window(
         fit_camera_to_slide=fit_camera_to_slide,
         render_offscreen=render_offscreen,
         save_now=save_now,
+        pick_world=pick_world,
         image_rows=image_rows,
         segment_rows=segment_rows,
         point_rows=point_rows,
@@ -1331,6 +1468,11 @@ def _dispatch(payload: dict):
         if not path:
             raise ipc.CommandError("snapshot needs a 'path' to write the PNG to")
         return controller.snapshot(path, payload.get("target", "canvas"))
+    if cmd == "pick":
+        x, y = payload.get("x"), payload.get("y")
+        if x is None or y is None:
+            raise ipc.CommandError("pick needs world 'x' and 'y'")
+        return controller.pick(x, y)
     if cmd == "reset":
         return controller.reset()
     if cmd == "save":

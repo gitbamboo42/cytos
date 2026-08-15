@@ -1,8 +1,8 @@
 """Polygon-tile streaming: reads `cytos.prep.polygons`'s tiled cache
 (already triangulated, Hilbert-sorted) and keeps a GPU-resident LRU cache of
 just the visible tiles as pygfx objects -- the same camera ->
-visible-tiles -> upload-new/evict-old loop as `cytos.render.image.TileCache`
-(built once in Phase 0, reused here per work-notes/plan.md Phase 3).
+visible-tiles -> upload-new/evict-old loop as `cytos.render.image.TileCache`,
+built once for image tiles and reused here.
 
 Each tile draws as two objects that can be shown independently:
 
@@ -14,11 +14,10 @@ Each tile draws as two objects that can be shown independently:
 * **fill** -- a `gfx.Mesh` over the cache's `triangle_indices`, the earcut
   triangulation `cytos.prep.polygons` already computed offline. Semi-
   transparent (`fill_opacity`) so the morphology image underneath stays
-  readable; the plan's Phase 2 open question ("triangulated outline strips, or
-  fill + screen-space edge shader?") turns out not to need an either/or --
-  both come off the same cached tile.
+  readable. Outline and fill both come off the same cached tile, so neither
+  needs its own preprocessed geometry.
 
-Recoloring (Phase 3's "one trick that earns the whole project"): color never
+Recoloring (the one trick that earns the whole project): color never
 lives in the vertex buffer. Each vertex carries its cell's dense id as a
 texcoord into a color LUT texture, nearest-filtered so adjacent cells never
 blend into each other at a shared boundary vertex -- the same
@@ -26,6 +25,16 @@ TextureMap(filter="nearest") pattern pygfx's own colormap textures use (see
 `pygfx.utils.cm.registered_colormap`). Outline and fill sample the *same* LUT,
 so recoloring the whole dataset by a per-cell feature is one texture upload,
 not touching any vertex data on either object.
+
+Picking rides pygfx's own pick buffer rather than a second render
+pass: both materials set `pick_write`, and `pick_cell` turns a pick-info dict
+(mesh face index, or line vertex index) back into a dense cell id via small
+per-tile lookup arrays. A *shown* layer answers anywhere inside a cell even
+with the fill switched off -- an off fill draws at opacity 0 rather than
+being hidden, so interiors keep writing the pick buffer (pygfx picks fully
+transparent meshes; verified). Truly hidden things stay silent: a hidden
+layer renders nothing, and a cell whose LUT alpha is 0 (a hidden category)
+is refused in `pick_cell` itself.
 """
 
 from __future__ import annotations
@@ -139,6 +148,11 @@ def flat_colors(n: int, colormap: str) -> np.ndarray:
 class _Tile:
     outline: gfx.Line
     fill: gfx.Mesh | None
+    # Pick lookups: dense cell id per outline *position* (2 per vertex, see
+    # `_make_outline`'s interleaving) and per fill *triangle* -- what turns a
+    # pick-info index back into a cell.
+    outline_cells: np.ndarray
+    fill_cells: np.ndarray | None
 
 
 class PolygonTileCache:
@@ -185,6 +199,11 @@ class PolygonTileCache:
         # must not un-hide a cached-but-off-screen tile, and can arrive before
         # the first update (the panel is built before the first frame draws).
         self._live: set[tuple[int, int]] = set()
+        # pick object -> its tile's cell lookup array (see `pick_cell`).
+        self._cell_of: dict[gfx.WorldObject, np.ndarray] = {}
+        # Which cells may pick at all -- False where the LUT drew alpha 0
+        # (a hidden category): what's invisible shouldn't answer a hover.
+        self._pickable: np.ndarray | None = None
 
         self._lut = IdColorLut(grid.n_cells)
         self._refresh_colors()
@@ -202,6 +221,7 @@ class PolygonTileCache:
         recolor-by-feature operation, independent of how many tiles/vertices
         that touches on screen."""
         self._lut.set_colors(colors)
+        self._pickable = colors[:, 3] > 0.0
 
     def _refresh_colors(self) -> None:
         n = self.grid.n_cells
@@ -242,6 +262,27 @@ class PolygonTileCache:
         self.category_hidden = dict(hidden or {})
         self._refresh_colors()
 
+    # -- picking -----------------------------------------------------------
+
+    def pick_cell(self, pick_info: dict) -> int | None:
+        """The dense cell id behind a renderer pick-info dict, or None when
+        the picked object isn't one of this cache's tiles (or the cell is
+        hidden). The dict comes from `renderer.get_pick_info` or a pointer
+        event's `pick_info` -- pygfx already picks on every pointer event to
+        route it, so hover costs no extra readback."""
+        cells = self._cell_of.get(pick_info.get("world_object"))
+        if cells is None:
+            return None
+        index = pick_info.get("face_index")
+        if index is None:
+            index = pick_info.get("vertex_index")
+        if index is None or not 0 <= index < len(cells):
+            return None
+        cell = int(cells[index])
+        if self._pickable is not None and not self._pickable[cell]:
+            return None
+        return cell
+
     # -- what's drawn ------------------------------------------------------
 
     def set_outline_visible(self, visible: bool) -> None:
@@ -250,16 +291,22 @@ class PolygonTileCache:
             tile.outline.visible = visible and self._is_live(key)
 
     def set_fill_visible(self, visible: bool) -> None:
+        # An off fill is opacity 0, not visible=False: the fill mesh doubles
+        # as the pick surface, and hover inside a cell must keep answering
+        # when only outlines are showing.
         self.show_fill = visible
-        for key, tile in self._cache.items():
+        for tile in self._cache.values():
             if tile.fill is not None:
-                tile.fill.visible = visible and self._is_live(key)
+                tile.fill.material.opacity = self._fill_opacity()
 
     def set_fill_opacity(self, opacity: float) -> None:
         self.fill_opacity = float(opacity)
         for tile in self._cache.values():
             if tile.fill is not None:
-                tile.fill.material.opacity = self.fill_opacity
+                tile.fill.material.opacity = self._fill_opacity()
+
+    def _fill_opacity(self) -> float:
+        return self.fill_opacity if self.show_fill else 0.0
 
     # -- tiles -------------------------------------------------------------
 
@@ -296,6 +343,7 @@ class PolygonTileCache:
             map=self._lut.map,
             color_mode="vertex_map",
         )
+        material.pick_write = True
         return gfx.Line(geometry, material)
 
     def _make_fill(self, coords: np.ndarray, cell_ids: np.ndarray, indices: np.ndarray) -> gfx.Mesh | None:
@@ -311,7 +359,8 @@ class PolygonTileCache:
             texcoords=self._lut.uv(cell_ids),
         )
         material = gfx.MeshBasicMaterial(map=self._lut.map, color_mode="vertex_map")
-        material.opacity = self.fill_opacity
+        material.opacity = self._fill_opacity()
+        material.pick_write = True
         # Explicit over-operator blending rather than the "auto" default: the
         # image tiles below use a custom *additive* alpha config (see
         # cytos.render.image), and "blend" composites the fill over whatever
@@ -328,10 +377,21 @@ class PolygonTileCache:
         # toggling fill/outline then costs nothing, where building lazily
         # would stall on a tile read plus an upload for every visible tile at
         # the moment the checkbox is clicked.
-        return _Tile(
+        made = _Tile(
             outline=self._make_outline(tile.coords, tile.vertex_cell_id),
             fill=self._make_fill(tile.coords, tile.vertex_cell_id, tile.triangle_indices),
+            # A line pick reports a *position* index (2 per vertex, from the
+            # interleaving), a mesh pick a *face* index; each gets an array
+            # in its own index space.
+            outline_cells=np.repeat(tile.vertex_cell_id, 2),
+            fill_cells=tile.vertex_cell_id[tile.triangle_indices.reshape(-1, 3)[:, 0]]
+            if len(tile.triangle_indices) >= 3
+            else None,
         )
+        self._cell_of[made.outline] = made.outline_cells
+        if made.fill is not None:
+            self._cell_of[made.fill] = made.fill_cells
+        return made
 
     def _is_live(self, key: tuple[int, int]) -> bool:
         return key in self._live
@@ -357,7 +417,9 @@ class PolygonTileCache:
             live = key in needed
             tile.outline.visible = live and self.show_outline
             if tile.fill is not None:
-                tile.fill.visible = live and self.show_fill
+                # Live fills always render (at opacity 0 when switched off)
+                # so cell interiors keep answering picks -- see set_fill_visible.
+                tile.fill.visible = live
 
         evicted = 0
         while len(self._cache) > self.max_tiles:
@@ -370,8 +432,10 @@ class PolygonTileCache:
                 self._cache.move_to_end(old_key)
                 break
             self._group.remove(old_tile.outline)
+            self._cell_of.pop(old_tile.outline, None)
             if old_tile.fill is not None:
                 self._group.remove(old_tile.fill)
+                self._cell_of.pop(old_tile.fill, None)
             evicted += 1
 
         return {

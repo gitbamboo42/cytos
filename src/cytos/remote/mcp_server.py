@@ -170,6 +170,15 @@ def set_camera(
 
 
 @server.tool()
+def pick(x: float, y: float, window: int | None = None) -> dict:
+    """Which cell is at world point (x, y) — the segment layer key, the
+    cell's index, and its whole per-cell feature row; hit: false if no cell
+    is there. Y increases downward. The point must be inside the current
+    view (picking reads the rendered frame — move the camera first)."""
+    return _call({"cmd": "pick", "window": window, "x": x, "y": y}, timeout_ms=_SLOW_TIMEOUT_MS)
+
+
+@server.tool()
 def snapshot(window: int | None = None, panel: bool = False) -> Image:
     """Render the window's current view and return it as a PNG image.
 

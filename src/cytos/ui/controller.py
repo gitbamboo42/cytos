@@ -117,6 +117,7 @@ class WindowController:
         fit_camera_to_slide,
         render_offscreen,
         save_now,
+        pick_world,
         image_rows,
         segment_rows,
         point_rows,
@@ -135,6 +136,7 @@ class WindowController:
         self.fit_camera_to_slide = fit_camera_to_slide
         self.render_offscreen = render_offscreen
         self.save_now = save_now
+        self.pick_world = pick_world
         # Live references to build_window's own lists, so layers added later
         # (File > Add Image…/Add Segments…) appear here without bookkeeping.
         self.image_rows = image_rows
@@ -409,6 +411,12 @@ class WindowController:
         Image.fromarray(array[..., :3].astype("uint8"), mode="RGB").save(path)
         height, width = array.shape[:2]
         return {"path": path, "width": int(width), "height": int(height)}
+
+    def pick(self, x, y) -> dict:
+        """Which cell is at world point (x, y): the layer key, the cell's
+        dense index, and its whole feature row -- or hit: false. The point
+        must be inside the current view (picking reads the rendered frame)."""
+        return self.pick_world(float(x), float(y))
 
     def reset(self) -> dict:
         self.reset_to_defaults()

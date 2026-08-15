@@ -166,6 +166,11 @@ class PointTileCache:
         self._group = gfx.Group()
         self._cache: OrderedDict[tuple[int, int], gfx.Points] = OrderedDict()
         self._live: set[tuple[int, int]] = set()
+        # pick object -> (gene_id per point, count per point or None) -- what
+        # turns a pick's vertex_index back into "which gene, how many".
+        self._point_of: dict[gfx.Points, tuple[np.ndarray, np.ndarray | None]] = {}
+        # Genes the LUT draws at alpha 0 don't pick -- invisible is silent.
+        self._pickable: np.ndarray | None = None
 
         self._lut = IdColorLut(self.n_genes)
         self._refresh_colors()
@@ -185,6 +190,7 @@ class PointTileCache:
         else:
             colors = flat_colors(self.n_genes, self.colormap)
         self._lut.set_colors(colors)
+        self._pickable = colors[:, 3] > 0.0
 
     def set_color_mode(self, mode: str) -> None:
         self.color_mode = mode
@@ -215,7 +221,28 @@ class PointTileCache:
             if points is not None:
                 self._group.remove(points)
         self._cache.clear()
+        self._point_of.clear()
         self._live = set()
+
+    # -- picking -----------------------------------------------------------
+
+    def pick_point(self, pick_info: dict) -> tuple[int, int | None] | None:
+        """(gene id, transcript count) behind a renderer pick-info dict --
+        count is None at full detail, the dot's weight on an aggregate
+        level. None when the picked object isn't one of this cache's tiles
+        (or the gene is drawn at alpha 0). Same contract as
+        `cytos.render.polygons.PolygonTileCache.pick_cell`."""
+        entry = self._point_of.get(pick_info.get("world_object"))
+        if entry is None:
+            return None
+        gene_ids, counts = entry
+        index = pick_info.get("vertex_index")
+        if index is None or not 0 <= index < len(gene_ids):
+            return None
+        gene = int(gene_ids[index])
+        if self._pickable is not None and not self._pickable[gene]:
+            return None
+        return gene, (int(counts[index]) if counts is not None else None)
 
     # -- appearance --------------------------------------------------------
 
@@ -316,7 +343,13 @@ class PointTileCache:
         # that sum instead of drawing them over it. Also what makes an alpha-0
         # LUT entry actually disappear rather than draw as a black dot.
         material.alpha_mode = "blend"
-        return gfx.Points(geometry, material)
+        material.pick_write = True
+        points = gfx.Points(geometry, material)
+        self._point_of[points] = (
+            np.asarray(tile.gene_id),
+            None if tile.count is None else np.asarray(tile.count),
+        )
+        return points
 
     def update(
         self,
@@ -354,6 +387,7 @@ class PointTileCache:
                 break
             if old_points is not None:
                 self._group.remove(old_points)
+                self._point_of.pop(old_points, None)
             evicted += 1
 
         return {

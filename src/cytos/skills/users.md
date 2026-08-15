@@ -110,6 +110,19 @@ the render is the ground truth, not the state JSON. `snapshot --panel`
 captures the dock panel (the controls) instead of the slide — for checking
 UI work with your own eyes, not for looking at data.
 
+## Picking a cell
+
+`cytos-ctl pick X Y` (MCP: `pick`) answers "what is at this world point".
+A cell answers with its segment layer key, index, and whole per-cell
+feature row; a transcript dot answers with its gene (and, zoomed out, the
+`count` of transcripts the aggregate dot stands for). The point must be
+inside the current view — picking reads the rendered frame, so move the
+camera first. What you see is what picks: a shown segment layer answers
+anywhere inside a cell, fill or no fill; hidden layers, categories, and
+unselected genes return `hit: false`; where things overlap, the topmost
+drawn one answers (a dot over a cell, a nucleus over a cell). (In the app,
+the same answer follows the mouse in the status bar.)
+
 ## Sessions and politeness
 
 Opening under `--session default` will overwrite the user's default view
