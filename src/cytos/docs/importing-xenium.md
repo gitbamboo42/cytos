@@ -52,8 +52,21 @@ image-less slide without complaint):
   `morphology_focus/morphology_focus_0000..0003.ome.tif` — one multi-file
   OME-TIFF, one file per stain, JPEG-2000 (hence the `imagecodecs`
   dependency). Discovery opens the first file, reads channel names from the
-  OME metadata, and emits one image layer per stain, DAPI first so it takes
-  blue.
+  OME metadata, and emits one image layer per stain, DAPI first. The OME
+  names are raw marker lists, identical in every bundle seen so far
+  *(verified: pancreas, ovarian Prime, kidney)*; `_KNOWN_STAINS` in
+  `prep/slide.py` maps them to layer ids that say what the stain is for,
+  with the default colors 10x's own viewer uses:
+
+  | OME channel name | layer id | color |
+  |---|---|---|
+  | `DAPI` | `nuclear` | blue |
+  | `ATP1A1/CD45/E-Cadherin` | `boundary` | magenta |
+  | `18S` | `interior_rna` | yellow |
+  | `alphaSMA/Vimentin` | `interior_protein` | green |
+
+  Unknown channel names fall through to a slugged id and a positional
+  color.
 
 `morphology.ome.tif` (no `_focus`) is the raw 3D z-stack — ignored. Pixel
 size has always been 0.2125 µm/px so far, but it is read from the OME

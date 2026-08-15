@@ -178,7 +178,7 @@ class ColorPopup(QtWidgets.QWidget):
     """See the module docstring. `on_pick` is called with the chosen value —
     a "#rrggbb", or a ramp colormap name when `include_ramps`."""
 
-    _PER_ROW = 7
+    _PER_ROW = 8
 
     def __init__(
         self,

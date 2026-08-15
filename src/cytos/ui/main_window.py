@@ -730,12 +730,12 @@ def build_window(
     # flat, ever-growing stack of unrelated rows.
     images_section = CollapsibleSection("Images")
     dock_layout.addWidget(images_section)
-    segments_section = CollapsibleSection("Segments")
+    # Segments and Points start collapsed (and unchecked, below): a fresh
+    # slide should open showing morphology with a short panel, and the
+    # Points gene list is by far the tallest thing in it. Images stays open
+    # -- its rows are the only way to tell which channels are on.
+    segments_section = CollapsibleSection("Segments", expanded=False)
     dock_layout.addWidget(segments_section)
-    # Collapsed by default even when loaded: its gene list is by far the
-    # tallest thing in the panel, and the layer is legible on screen without
-    # it -- unlike Images/Segments, whose controls are the only way to tell
-    # what's being shown.
     points_section = CollapsibleSection("Points", expanded=False)
     dock_layout.addWidget(points_section)
 
@@ -896,7 +896,7 @@ def build_window(
     saved_sections = session.get("sections", {})
     for name, section, default_expanded, default_checked in (
         ("images", images_section, True, True),
-        ("segments", segments_section, True, False),
+        ("segments", segments_section, False, False),
         ("points", points_section, False, False),
     ):
         saved = saved_sections.get(name)

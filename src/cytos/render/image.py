@@ -20,16 +20,20 @@ from cytos.core.image import PyramidLevel, visible_chunk_keys
 # Fluorescence composite display wants pixel value 0 -> black, not white:
 # plotlet's (matplotlib-derived) "Blues"/"Greens"/"Reds" run near-white ->
 # dark-color, which washes an additive-blended composite's background to
-# gray instead of black. Register the standard microscopy-viewer black->hue
-# set instead (same names/purpose as napari's SIMPLE_COLORMAPS). Plotlet
-# colormap registration is per-process, so this runs once at import time.
+# gray instead of black. Register a black->hue set instead (same names and
+# purpose as napari's SIMPLE_COLORMAPS, different hexes): each hue is dimmed
+# to roughly equal CIELAB lightness (L* ~50-65) rather than kept at full
+# sRGB brightness, so no channel outshines the others in a composite --
+# pure #00ff00 green glows ~2.5x brighter than blue and dominates every
+# overlay. Plotlet colormap registration is per-process, so this runs once
+# at import time.
 _COMPOSITE_HUES = {
-    "blue": "#0000ff",
-    "green": "#00ff00",
-    "red": "#ff0000",
-    "cyan": "#00ffff",
-    "magenta": "#ff00ff",
-    "yellow": "#ffff00",
+    "blue": "#0f73e6",
+    "green": "#008a00",
+    "red": "#f00219",
+    "cyan": "#00a5a5",
+    "magenta": "#f300a5",
+    "yellow": "#a4a400",
 }
 for _name, _hex in _COMPOSITE_HUES.items():
     if _name not in plotlet.list_colormaps():
@@ -40,25 +44,18 @@ for _name, _hex in _COMPOSITE_HUES.items():
 # newly loaded channel by cycling through them.
 COMPOSITE_COLORMAPS = list(_COMPOSITE_HUES.keys())
 
-# The channel color picker's presets, (name, "#rrggbb") pairs: the classic
-# fluorescence six first, then white, then the rest of the 30-degree hue
-# wheel plus gray. A channel's `colormap` value may also be any "#rrggbb"
-# of the user's own.
+# The channel color picker's presets, (name, "#rrggbb") pairs -- the six
+# lightness-matched hues above plus orange (same treatment) and white. A
+# channel's `colormap` value may also be any "#rrggbb" of the user's own.
 CHANNEL_COLOR_PRESETS = [
-    ("Blue", "#0000ff"),
-    ("Green", "#00ff00"),
-    ("Red", "#ff0000"),
-    ("Cyan", "#00ffff"),
-    ("Magenta", "#ff00ff"),
-    ("Yellow", "#ffff00"),
+    ("Blue", "#0f73e6"),
+    ("Green", "#008a00"),
+    ("Yellow", "#a4a400"),
+    ("Orange", "#f26500"),
+    ("Red", "#f00219"),
+    ("Magenta", "#f300a5"),
+    ("Cyan", "#00a5a5"),
     ("White", "#ffffff"),
-    ("Orange", "#ff8000"),
-    ("Chartreuse", "#80ff00"),
-    ("Spring green", "#00ff80"),
-    ("Azure", "#0080ff"),
-    ("Purple", "#8000ff"),
-    ("Rose", "#ff0080"),
-    ("Gray", "#808080"),
 ]
 
 

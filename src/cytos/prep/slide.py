@@ -63,6 +63,7 @@ class _ImageSource:
     id: str
     path: Path  # an .ome.zarr to copy, or an .ome.tif to convert
     channel: int = 0
+    colormap: str | None = None  # None -> assigned by position at write time
 
 
 @dataclass
@@ -78,6 +79,20 @@ def _channel_layer_id(name: str, channel: int) -> str:
     files and session keys, so it has to be filesystem- and JSON-key-safe."""
     slug = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
     return slug or f"ch{channel}"
+
+
+# The multimodal segmentation stains, keyed by their OME channel name
+# (lowercased). The raw names are marker lists ("ATP1A1/CD45/E-Cadherin")
+# that mean nothing to most readers, so each known stain gets a layer id
+# saying what the stain is *for*, plus the color Xenium users already know
+# it by. Unknown channel names fall through to the slug + positional color.
+# See docs/importing-xenium.md.
+_KNOWN_STAINS = {
+    "dapi": ("nuclear", "blue"),
+    "atp1a1/cd45/e-cadherin": ("boundary", "magenta"),
+    "18s": ("interior_rna", "yellow"),
+    "alphasma/vimentin": ("interior_protein", "green"),
+}
 
 
 def _discover_xenium(source: Path) -> tuple[list[_ImageSource], list[SegmentSource], list[_PointSource]]:
@@ -103,12 +118,17 @@ def _discover_xenium(source: Path) -> tuple[list[_ImageSource], list[SegmentSour
         multi = sorted(focus_dir.glob("morphology_focus_*.ome.tif")) if focus_dir.is_dir() else []
         if multi:
             names = ome_channel_names(multi[0])
-            # DAPI first, same rule as the zarr branch above: channels take
-            # their default colormap by position, and the nuclear stain
-            # should land on blue.
+            # DAPI first, same rule as the zarr branch above -- known stains
+            # carry their own color, but the nuclear layer should still head
+            # the panel.
             order = sorted(range(len(names)), key=lambda i: ("dapi" not in names[i].lower(), i))
             for i in order:
-                images.append(_ImageSource(id=_channel_layer_id(names[i], i), path=multi[0], channel=i))
+                stain = _KNOWN_STAINS.get(names[i].lower())
+                if stain:
+                    layer_id, colormap = stain
+                else:
+                    layer_id, colormap = _channel_layer_id(names[i], i), None
+                images.append(_ImageSource(id=layer_id, path=multi[0], channel=i, colormap=colormap))
         elif tif.exists():
             images.append(_ImageSource(id="morphology", path=tif))
         elif focus_dir.is_dir():
@@ -297,7 +317,7 @@ def import_slide(
         # [0, 0] and a black image.
         if staged is not None and zip_stores:
             zip_store(staged, dest, remove_source=True)
-        colormap = colormaps.get(img.id, DEFAULT_CHANNEL_COLORMAPS[i % len(DEFAULT_CHANNEL_COLORMAPS)])
+        colormap = colormaps.get(img.id) or img.colormap or DEFAULT_CHANNEL_COLORMAPS[i % len(DEFAULT_CHANNEL_COLORMAPS)]
         layers.append(
             {
                 "kind": "image",
