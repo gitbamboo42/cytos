@@ -6,7 +6,31 @@ build-backend = "hatchling.build"
 name = "cytos"
 version = "0.1.0"
 description = "Fast, read-only viewer for spatial biology: cell segmentation polygons over a large OME-Zarr morphology image."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
+authors = [
+    { name = "gitbamboo42" },
+]
+keywords = [
+    "spatial-biology",
+    "microscopy",
+    "segmentation",
+    "ome-zarr",
+    "xenium",
+    "viewer",
+    "visualization",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Visualization",
+]
 dependencies = [
     "numpy",
     "pygfx",
@@ -35,6 +59,10 @@ dependencies = [
 # `cytos-mcp`, the MCP adapter for AI clients without a shell — optional
 # because the MCP SDK drags in a web stack the viewer itself never needs.
 mcp = ["mcp>=2"]
+
+[project.urls]
+Homepage = "https://github.com/gitbamboo42/cytos"
+Repository = "https://github.com/gitbamboo42/cytos"
 
 [project.scripts]
 cytos-viewer = "cytos.cli:viewer"
