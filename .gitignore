@@ -27,6 +27,9 @@ env/
 /CLAUDE.md
 .claude/
 
+# Web viewer
+web/node_modules/
+
 # Project data (large binary datasets, fetched on demand)
 /data/
 
