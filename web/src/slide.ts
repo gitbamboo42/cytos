@@ -38,6 +38,8 @@ export interface SegmentLayerSpec {
   show_fill?: boolean;
   fill_opacity?: number;
   visible?: boolean;
+  color_by?: string | null;
+  colormap?: string;
 }
 
 export interface SlideManifest {
@@ -156,7 +158,7 @@ type Selection = Record<string, number>;
 
 /** Present N single-channel `(y, x)` pyramids as one `(c, y, x)` source per
  * level, dispatching on the `c` of each request. */
-class ChannelStackSource {
+export class ChannelStackSource {
   labels: ['c', 'y', 'x'] = ['c', 'y', 'x'];
 
   constructor(private channels: ZarrPixelSource<[]>[]) {}
@@ -202,6 +204,25 @@ export function stackChannels(perChannel: ZarrPixelSource<[]>[][]): ChannelStack
     { length: nLevels },
     (_, i) => new ChannelStackSource(perChannel.map((levels) => levels[i])),
   );
+}
+
+/** Percentile-based contrast limits (1st / 99.5th), matching the Qt
+ * viewer's autocontrast: fluorescence is sparse and heavy-tailed, so raw
+ * min/max crushes the image to near-black. Reads the lowest-resolution
+ * level — the statistics barely differ and it is already in cache. */
+export async function autocontrast(
+  loader: ChannelStackSource[],
+  channel: number,
+): Promise<[number, number]> {
+  const lowest = loader[loader.length - 1];
+  const { data } = await lowest.getRaster({ selection: { c: channel } });
+  const stride = Math.max(1, Math.floor(data.length / 1_000_000));
+  const sample: number[] = [];
+  for (let i = 0; i < data.length; i += stride) sample.push(data[i]);
+  sample.sort((a, b) => a - b);
+  const lo = sample[Math.floor(0.01 * (sample.length - 1))];
+  const hi = sample[Math.ceil(0.995 * (sample.length - 1))];
+  return hi > lo ? [lo, hi] : [lo, lo + 1];
 }
 
 /** The black→hue ramps cytos names in manifests, as viv channel colors. */

@@ -31,6 +31,13 @@ import {
   type SlideManifest,
 } from './slide';
 import type { stackChannels } from './slide';
+import {
+  imageKey,
+  segmentsKey,
+  type ImageSettings,
+  type SegmentSettings,
+  type SlideSettings,
+} from './state';
 
 export interface LoadedSlide {
   manifest: SlideManifest;
@@ -69,17 +76,18 @@ function segmentTileLayer(
   slide: LoadedSlide,
   source: SegmentTileSource,
   index: number,
+  settings: SegmentSettings,
 ) {
   const spec = source.spec;
   const [minx, miny, maxx, maxy] = slide.manifest.world_bounds;
   const s = slide.pixelSize;
   // World µm -> full-res pixel coords.
   const worldToPixels = new Matrix4().scale([1 / s, 1 / s, 1]);
-  const fillAlpha = spec.show_fill ? Math.round(255 * (spec.fill_opacity ?? 0.35)) : 0;
+  const fillAlpha = settings.show_fill ? Math.round(255 * settings.fill_opacity) : 0;
 
   return new TileLayer<DeckSegmentTile | null>({
     id: `segments-${spec.id}`,
-    visible: spec.visible ?? true,
+    visible: settings.visible,
     // Our grid is a single flat level: clamping zoom to 0 with tileSize equal
     // to one tile's world size makes deck's tile index (x, y) exactly our
     // (col, row).
@@ -87,6 +95,12 @@ function segmentTileLayer(
     minZoom: 0,
     maxZoom: 0,
     extent: [minx / s, miny / s, maxx / s, maxy / s],
+    // deck ignores function-prop identity on purpose, so a new
+    // renderSubLayers closure alone never regenerates already-rendered
+    // tiles — display settings must be declared here to take effect.
+    updateTriggers: {
+      renderSubLayers: [fillAlpha, settings.show_outline],
+    },
     // The deck-ready binary objects are built HERE, once per tile, so their
     // references stay stable. renderSubLayers runs on every deck update for
     // every visible tile; building fresh objects there made deck see
@@ -124,7 +138,7 @@ function segmentTileLayer(
           highlightColor: [255, 255, 120, 140],
           modelMatrix: worldToPixels,
         }),
-        (spec.show_outline ?? true) &&
+        settings.show_outline &&
           new PathLayer({
             id: `${props.id}-outline`,
             data: paths,
@@ -148,13 +162,18 @@ function tooltip(info: PickingInfo) {
 
 export function SlideViewer({
   slide,
+  settings,
   initialView,
 }: {
   slide: LoadedSlide;
+  settings: SlideSettings;
   /** [x, y, zoom] in full-res pixel coords — the `?view=` URL param. */
   initialView?: [number, number, number];
 }) {
   const [, height, width] = slide.loader[0].shape;
+  const image = (id: string) => settings.layers[imageKey(id)] as ImageSettings;
+  const imagesOn = settings.sections.images?.checked ?? true;
+  const segmentsOn = settings.sections.segments?.checked ?? true;
 
   const layers = [
     new MultiscaleImageLayer({
@@ -162,16 +181,24 @@ export function SlideViewer({
       loader: slide.loader,
       dtype: slide.loader[0].dtype,
       selections: slide.channels.map((_, i) => ({ c: i })),
-      contrastLimits: slide.channels.map((c) => c.clim ?? [0, 65535]),
-      channelsVisible: slide.channels.map((c) => c.visible ?? true),
+      contrastLimits: slide.channels.map((c) => image(c.id).clim),
+      channelsVisible: slide.channels.map((c) => imagesOn && image(c.id).visible),
       extensions: [new ColorPaletteExtension()],
       // `colors` is the extension's prop, absent from the layer's own TS
       // props — a spread slips past the excess-property check.
       ...{
-        colors: slide.channels.map((c) => CHANNEL_COLORS[c.colormap] ?? [255, 255, 255]),
+        colors: slide.channels.map(
+          (c) => CHANNEL_COLORS[image(c.id).colormap] ?? [255, 255, 255],
+        ),
       },
     }),
-    ...slide.segments.map((source, i) => segmentTileLayer(slide, source, i)),
+    ...slide.segments.map((source, i) => {
+      const layerSettings = settings.layers[segmentsKey(source.spec.id)] as SegmentSettings;
+      return segmentTileLayer(slide, source, i, {
+        ...layerSettings,
+        visible: segmentsOn && layerSettings.visible,
+      });
+    }),
   ];
 
   const fitZoom = Math.log2(
