@@ -34,6 +34,33 @@ for (const path of [datasets[datasets.length - 1].path, datasets[0].path]) {
   );
 }
 
+// A segment tile: rings are reconstructed from runs of vertex_cell_id, so
+// verify each cell id really is one contiguous run.
+const seg = manifest.layers.find((l) => l.kind === 'segments');
+if (seg) {
+  const segRoot = zarr.root(new zarr.FetchStore(`${base}/${seg.path}/tiles.zarr`));
+  const [row, col] = seg.tiles[0];
+  const tilePath = `tile/${seg.tile_depth}/${row}/${col}`;
+  const t0 = performance.now();
+  const [coords, vcid] = await Promise.all(
+    ['coords', 'vertex_cell_id'].map(async (name) => {
+      const arr = await zarr.open(segRoot.resolve(`${tilePath}/${name}`), { kind: 'array' });
+      return (await zarr.get(arr)).data;
+    }),
+  );
+  const ms = (performance.now() - t0).toFixed(1);
+  const runIds = [];
+  for (let i = 0; i < vcid.length; i++) {
+    if (i === 0 || vcid[i] !== vcid[i - 1]) runIds.push(vcid[i]);
+  }
+  const contiguous = new Set(runIds).size === runIds.length;
+  console.log(
+    `segments "${seg.id}" ${tilePath}: ${coords.length / 2} vertices, ` +
+      `${runIds.length} cells in ${ms} ms; one run per cell: ${contiguous}`,
+  );
+  if (!contiguous) throw new Error('vertex_cell_id runs are not one per cell');
+}
+
 // Range request through the same server, as the zip reader will use later.
 const res = await fetch(`${base}/cytos.json`, { headers: { Range: 'bytes=0-15' } });
 console.log('range request:', res.status, JSON.stringify(await res.text()));

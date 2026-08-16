@@ -26,13 +26,37 @@ export interface ImageLayerSpec {
   visible?: boolean;
 }
 
+export interface SegmentLayerSpec {
+  kind: 'segments';
+  id: string;
+  path: string;
+  format: string;
+  tile_depth: number;
+  tiles: [number, number][];
+  n_cells: number;
+  show_outline?: boolean;
+  show_fill?: boolean;
+  fill_opacity?: number;
+  visible?: boolean;
+}
+
 export interface SlideManifest {
   cytos_format: number;
   name: string;
   world_units: string;
   world_bounds: [number, number, number, number];
   tile_depth: number;
-  layers: Array<ImageLayerSpec | { kind: string; id: string; path: string }>;
+  layers: Array<
+    ImageLayerSpec | SegmentLayerSpec | { kind: string; id: string; path: string }
+  >;
+}
+
+/** Side length of one vector tile in world units — same formula as
+ * `tile_world_size` in `src/cytos/core/tiling.py`: a square grid over the
+ * slide's longest axis. */
+export function tileWorldSize(manifest: SlideManifest): number {
+  const [minx, miny, maxx, maxy] = manifest.world_bounds;
+  return Math.max(maxx - minx, maxy - miny) / (1 << manifest.tile_depth);
 }
 
 /** The largest slide format this reader understands. Bumped in lockstep
@@ -61,7 +85,7 @@ export function httpReadRange(baseUrl: string): ReadRange {
 }
 
 /** Adapt a ReadRange to zarrita's store interface. */
-class RangeStore implements zarr.AsyncReadable {
+export class RangeStore implements zarr.AsyncReadable {
   constructor(
     private read: ReadRange,
     private prefix: string,
@@ -89,11 +113,20 @@ export function imageLayers(manifest: SlideManifest): ImageLayerSpec[] {
   return manifest.layers.filter((l): l is ImageLayerSpec => l.kind === 'image');
 }
 
-/** One ZarrPixelSource per resolution level, full resolution first. */
+export function segmentLayers(manifest: SlideManifest): SegmentLayerSpec[] {
+  return manifest.layers.filter((l): l is SegmentLayerSpec => l.kind === 'segments');
+}
+
+export interface ImagePyramid {
+  levels: ZarrPixelSource<[]>[]; // full resolution first
+  /** World units (µm) per full-resolution pixel, from the NGFF scale. */
+  pixelSize: number;
+}
+
 export async function openImagePyramid(
   read: ReadRange,
   layer: ImageLayerSpec,
-): Promise<ZarrPixelSource<[]>[]> {
+): Promise<ImagePyramid> {
   if (layer.format !== 'ome-ngff-0.5') {
     throw new Error(
       `image layer "${layer.id}" has format "${layer.format}" — this reader ` +
@@ -101,19 +134,22 @@ export async function openImagePyramid(
     );
   }
   const root = zarr.root(new RangeStore(read, layer.path));
-  const group = await zarr.open(root, { kind: 'group' });
+  const group = await zarr.open.v3(root, { kind: 'group' });
   const attrs = group.attrs as Record<string, any>;
   const multiscale = (attrs.ome ?? attrs).multiscales[0];
 
   const levels: ZarrPixelSource<[]>[] = [];
   for (const dataset of multiscale.datasets) {
-    const arr = await zarr.open(root.resolve(dataset.path), { kind: 'array' });
+    const arr = await zarr.open.v3(root.resolve(dataset.path), { kind: 'array' });
     const tileSize = arr.chunks[arr.chunks.length - 1];
     levels.push(
       new ZarrPixelSource(arr as zarr.Array<zarr.NumberDataType>, ['y', 'x'], tileSize),
     );
   }
-  return levels;
+
+  const transforms = multiscale.datasets[0].coordinateTransformations ?? [];
+  const scale = transforms.find((t: { type: string }) => t.type === 'scale');
+  return { levels, pixelSize: scale ? scale.scale[scale.scale.length - 1] : 1 };
 }
 
 type Selection = Record<string, number>;
@@ -121,7 +157,7 @@ type Selection = Record<string, number>;
 /** Present N single-channel `(y, x)` pyramids as one `(c, y, x)` source per
  * level, dispatching on the `c` of each request. */
 class ChannelStackSource {
-  labels = ['c', 'y', 'x'];
+  labels: ['c', 'y', 'x'] = ['c', 'y', 'x'];
 
   constructor(private channels: ZarrPixelSource<[]>[]) {}
 

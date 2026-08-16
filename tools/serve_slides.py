@@ -28,6 +28,16 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 
 class SlideHandler(SimpleHTTPRequestHandler):
+    # HTTP/1.1 keep-alive. The stdlib default is HTTP/1.0 — one TCP
+    # connection per request — which throttled tile loading to a crawl
+    # (a polygon tile is ~4 small requests).
+    protocol_version = "HTTP/1.1"
+    # TCP_NODELAY. Headers and body go out as separate writes; with Nagle
+    # on, each response on a keep-alive connection stalls ~40 ms waiting
+    # for the client's delayed ACK — measured ~65 ms per request from the
+    # browser against ~3 ms once disabled.
+    disable_nagle_algorithm = True
+
     def end_headers(self) -> None:
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Headers", "Range")
