@@ -265,6 +265,16 @@ building the tool, stated so the guards in the code don't look removable.
   real dependency. Discovery must know old and new layouts both: a glob for
   only the old per-channel names finds nothing in a new bundle and imports
   an image-less slide without complaint.
+- **A PySide6 QAction wrapper must stay referenced while you use what it
+  returned.** `bar.actions()[0].menu()` dies with `Internal C++ object
+  (QMenu) already deleted`: the QAction wrapper is a temporary, Python
+  collects it as soon as `.menu()` returns, and shiboken invalidates the
+  menu it handed out along with it. Hold the action in a variable for as
+  long as the menu is in use (`act = bar.actions()[0]; menu = act.menu()`).
+  Nothing in the app walks menus this way — this bites in *tests and
+  probes* that inspect a built menu, where it looks exactly like a
+  wrapper-lifetime bug in the menu-building code. It isn't; the same
+  failure reproduces on any hand-built QMenuBar.
 
 ## Errors and warnings
 

@@ -70,6 +70,7 @@ from cytos.ui.collapsible_section import CollapsibleSection
 from cytos.ui.minimap import MinimapWidget, make_composite_thumbnail
 from cytos.ui.scale_bar import ScaleBarWidget, unit_abbrev
 from cytos.ui.points_panel import PointsRow
+from cytos.ui.recent import forget_all, recent_slides, remember_slide
 from cytos.ui.segment_panel import SegmentRow
 from cytos.ui.session_picker import choose_session
 from cytos.ui.canvas_input import CanvasRenderWidget
@@ -296,6 +297,46 @@ def prompt_open_slide(parent, max_tiles: int) -> bool:
     return opened
 
 
+def _add_open_recent_menu(file_menu, max_tiles: int, parent=None, on_opened=None) -> None:
+    """File > Open Recent, rebuilt each time it is about to show — so every
+    window's copy reads the same store at the moment it opens, and no window
+    has to tell the others the list changed.
+
+    Entries whose directory is missing right now are skipped, not removed:
+    the store keeps them (see cytos.ui.recent), so a slide on an unmounted
+    drive reappears when the drive does. `on_opened` is for the welcome
+    window, which closes itself once a slide is up — the same contract as
+    its Open Slide… handler.
+    """
+    menu = file_menu.addMenu("Open Recent")
+
+    def open_recent(path: Path) -> None:
+        try:
+            opened = build_window(path, max_tiles, parent=parent) is not None
+        except (ValueError, KeyError, OSError) as err:
+            QtWidgets.QMessageBox.warning(parent, "Could not open slide", str(err))
+            return
+        if opened and on_opened is not None:
+            on_opened()
+
+    def rebuild() -> None:
+        menu.clear()
+        slides = [p for p in recent_slides() if p.is_dir()]
+        for path in slides:
+            action = menu.addAction(path.name)
+            action.triggered.connect(lambda _checked=False, p=path: open_recent(p))
+        if slides:
+            menu.addSeparator()
+        # Present but greyed when there is nothing to clear, so an empty menu
+        # still opens and reads as "empty" -- how macOS's own Open Recent works.
+        clear_action = menu.addAction("Clear Menu")
+        clear_action.setEnabled(bool(slides))
+        clear_action.triggered.connect(forget_all)
+
+    menu.aboutToShow.connect(rebuild)
+    rebuild()
+
+
 def _place_window(win: QtWidgets.QWidget) -> None:
     """Centre a window on its screen, nudged down-right per window already open.
 
@@ -363,6 +404,7 @@ def prompt_new_slide(parent, max_tiles: int) -> bool:
     win.setCentralWidget(panel)
     file_menu = win.menuBar().addMenu("File")
     file_menu.addAction("Open Slide…").triggered.connect(lambda: prompt_open_slide(win, max_tiles))
+    _add_open_recent_menu(file_menu, max_tiles, parent=win)
 
     def become_viewer() -> None:
         try:
@@ -447,6 +489,8 @@ def build_welcome_window(max_tiles: int) -> QtWidgets.QMainWindow:
     open_action = file_menu.addAction("Open Slide…")
     open_action.setShortcut(QtGui.QKeySequence.StandardKey.Open)
     open_action.triggered.connect(on_open)
+    # Closes the welcome window on success, same as on_open above.
+    _add_open_recent_menu(file_menu, max_tiles, parent=win, on_opened=win.close)
     # The other half of "I have no slide": this window is exactly where someone
     # who has only a Xenium folder ends up, and offering only Open makes it a
     # dead end for them.
@@ -470,6 +514,7 @@ def build_app_menu_bar(max_tiles: int) -> QtWidgets.QMenuBar:
     action = file_menu.addAction("Open Slide…")
     action.setShortcut(QtGui.QKeySequence.StandardKey.Open)
     action.triggered.connect(lambda: prompt_open_slide(None, max_tiles))
+    _add_open_recent_menu(file_menu, max_tiles)
     file_menu.addMenu("New Slide from").addAction("Xenium Output…").triggered.connect(
         lambda: prompt_new_slide(None, max_tiles)
     )
@@ -1075,6 +1120,7 @@ def build_window(
     open_action = file_menu.addAction("Open Slide…")
     open_action.setShortcut(QtGui.QKeySequence.StandardKey.Open)
     open_action.triggered.connect(open_slide)
+    _add_open_recent_menu(file_menu, max_tiles, parent=win)
     file_menu.addMenu("New Slide from").addAction("Xenium Output…").triggered.connect(
         lambda: prompt_new_slide(win, max_tiles)
     )
@@ -1399,6 +1445,11 @@ def build_window(
     win.show()
     if not reused:
         _OPEN_WINDOWS.append(win)
+    # Every route into a slide ends here -- menu, recents, control socket, or
+    # a finished import -- so this is the one place the recents list learns
+    # about an open. A cancelled session picker returned above and is not
+    # recorded: nothing opened.
+    remember_slide(slide.root)
     print("window open — left-drag to pan, scroll to zoom, per-layer controls in the dock panel")
     return win
 
@@ -1584,6 +1635,11 @@ def _ensure_app() -> QtWidgets.QApplication:
     app = QtWidgets.QApplication.instance()
     if app is None:
         app = QtWidgets.QApplication(sys.argv)
+        # QStandardPaths builds per-app paths from this name (see
+        # cytos.ui.recent). Unset, Qt falls back to the executable's basename
+        # -- "cytos-viewer" from the console script but "python" from a dev
+        # invocation, so the app's data directory would silently move.
+        app.setApplicationName("cytos")
         app.setStyle("Fusion")
     return app
 
