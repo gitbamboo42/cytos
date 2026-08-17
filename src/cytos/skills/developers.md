@@ -52,6 +52,10 @@ see below).
 and `pip install cytos` does not carry it. It carries the same one-directional
 rule, as directories: `core/` (model) ← `io/` (readers) ← `render/` (deck.gl
 layers) ← `ui/` (React). Check direction before adding an import.
+`web/electron/` is the desktop shell — a main process and a preload script,
+outside that chain and importing nothing from it. The page reaches the shell
+only through `io/host.ts`, whose interface is the twin of what `preload.cjs`
+exposes.
 
 `tools/` stays outside the package, deliberately: `make_synthetic_big_pyramid.py`
 and `make_label_mask.py` are dev-only generators, `serve_slides.py` is the dev
@@ -162,8 +166,23 @@ own eyes. The native `<select>` popup is drawn by the OS at system font size
 and ignores page CSS, so `ui/controls.tsx` ships its own `Dropdown`: if a
 control's geometry isn't yours, you can't line it up.
 
+The same build runs as a desktop app, menu bar and no browser chrome:
+`npm run app` loads `dist/`, `npm run app:dev` loads the vite server so edits
+still hot-reload, `npm run make` packages `release/mac-arm64/cytos.app`, and
+`app-shot.mjs` is `shot.mjs` for that window. No server — slides are read off
+the disk through `cytos:read`, which answers what `httpReadRange` answers over
+HTTP, so `RangeStore`, `ZipStore`, viv and deck never learn which they got,
+and at one viewport on pancreas the two tie (38.0 s against 40.4 s of
+cumulative fetch over the same 216 tiles). Three constraints hold it up: vite
+needs `base: './'`, since the packaged page loads off the disk where
+`/assets/…` means the filesystem root; the preload is CommonJS, since Electron
+allows an ESM preload only with the sandbox off; and a shell exporting
+`ELECTRON_RUN_AS_NODE=1` (Claude Code's does) makes the binary act as plain
+node — no window, and `--version` prints node's.
+
 Not built yet: points/transcripts, session save/load, the minimap, and adding
-a channel or segmentation to an open slide.
+a channel or segmentation to an open slide. The app is unsigned, which only
+matters for a build someone *downloads*, never for one built here.
 
 ## The cross-language contract
 

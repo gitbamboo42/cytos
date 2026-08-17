@@ -1,20 +1,25 @@
 /**
- * Load a `.cytos` slide from a URL and hand it to the viewer.
+ * Load a `.cytos` slide and hand it to the viewer.
  *
- * Point it at a slide with `?slide=<url>`, e.g.
+ * Two ways in, one viewer. In a browser tab the slide is a URL, named with
+ * `?slide=<url>`, e.g.
  *   http://localhost:5173/?slide=http://127.0.0.1:8787/pancreas_ffpe.cytos
- * (that default is filled in when the param is missing). The slide server is
- * `tools/serve_slides.py`.
+ * (that default fills in when the param is missing). In the desktop shell it
+ * is a directory on disk, chosen from File ▸ Open Slide… or named on the
+ * command line, and there is no default — an empty window says so, the way
+ * the Qt viewer's welcome window does.
  *
- * Wiring only: read the URL params, load, hold the settings. What loading
- * means is `io/slide.ts`; what the settings mean is `core/session.ts`.
+ * Wiring only: find the slide, load it, hold the settings. What loading means
+ * is `io/slide.ts`; what the settings mean is `core/session.ts`; where the
+ * bytes come from is `io/read.ts`.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { defaultSettings, segmentsKey, type SlideSettings } from './core/session';
 import { loadFeatures, type FeatureTable } from './io/features';
-import { httpReadRange } from './io/read';
+import { desktopHost } from './io/host';
+import { readerFor } from './io/read';
 import { loadSlide, type LoadedSlide } from './io/slide';
 import { SlideViewer } from './render/scene';
 import type { CustomColors } from './ui/color-picker';
@@ -23,14 +28,20 @@ import { Panel } from './ui/panel';
 const DEFAULT_SLIDE = 'http://127.0.0.1:8787/pancreas_ffpe.cytos';
 
 export default function App() {
+  const host = desktopHost();
   const params = new URLSearchParams(window.location.search);
-  const slideUrl = params.get('slide')?.replace(/\/+$/, '') ?? DEFAULT_SLIDE;
   // ?view=x,y,zoom (full-res pixel coords) — start somewhere specific.
   const viewParam = params.get('view')?.split(',').map(Number);
   const initialView =
     viewParam?.length === 3 && viewParam.every(Number.isFinite)
       ? (viewParam as [number, number, number])
       : undefined;
+
+  const [slideUrl, setSlideUrl] = useState<string | null>(() => {
+    const named = params.get('slide')?.replace(/\/+$/, '');
+    if (named) return named;
+    return host ? null : DEFAULT_SLIDE;
+  });
   const [slide, setSlide] = useState<LoadedSlide | null>(null);
   const [settings, setSettings] = useState<SlideSettings | null>(null);
   const [features, setFeatures] = useState<Record<string, FeatureTable | null>>({});
@@ -47,9 +58,31 @@ export default function App() {
     remove: (hex) => setCustomColors((prev) => prev.filter((c) => c !== hex)),
   };
 
+  // The menu acts on whatever slide is loaded *now*, so it reads a ref rather
+  // than closing over one — the listeners are registered once, not per slide.
+  const slideRef = useRef<LoadedSlide | null>(null);
+  slideRef.current = slide;
+
   useEffect(() => {
+    if (!host) return;
+    host.initialSlide().then((dir) => {
+      if (dir) setSlideUrl(dir);
+    });
+    host.onOpenSlide(setSlideUrl);
+    host.onResetSettings(() => {
+      const current = slideRef.current;
+      if (current) setSettings(defaultSettings(current.manifest));
+    });
+  }, [host]);
+
+  useEffect(() => {
+    if (!slideUrl) return;
     let cancelled = false;
-    loadSlide(httpReadRange(slideUrl))
+    setSlide(null);
+    setSettings(null);
+    setFeatures({});
+    setError(null);
+    loadSlide(readerFor(slideUrl))
       .then((loaded) => {
         if (cancelled) return;
         setSlide(loaded);
@@ -66,9 +99,9 @@ export default function App() {
   // Per-cell feature tables load after the first render, one fetch per
   // segment layer — the viewer recolors as each arrives.
   useEffect(() => {
-    if (!slide) return;
+    if (!slide || !slideUrl) return;
     let cancelled = false;
-    const read = httpReadRange(slideUrl);
+    const read = readerFor(slideUrl);
     for (const source of slide.segments) {
       const key = segmentsKey(source.spec.id);
       loadFeatures(read, source.spec.path)
@@ -82,6 +115,20 @@ export default function App() {
     };
   }, [slide, slideUrl]);
 
+  if (!slideUrl) {
+    return (
+      <div style={{ padding: 24 }}>
+        <h2>cytos</h2>
+        <p>No slide open.</p>
+        <p>
+          <button type="button" onClick={() => host?.openSlideDialog()}>
+            Open Slide…
+          </button>{' '}
+          or press ⌘O.
+        </p>
+      </div>
+    );
+  }
   if (error) {
     return (
       <div style={{ padding: 24 }}>
@@ -90,9 +137,11 @@ export default function App() {
           <code>{slideUrl}</code>
         </p>
         <p>{error}</p>
-        <p>
-          Is the data server running? <code>python tools/serve_slides.py</code>
-        </p>
+        {!host && (
+          <p>
+            Is the data server running? <code>python tools/serve_slides.py</code>
+          </p>
+        )}
       </div>
     );
   }

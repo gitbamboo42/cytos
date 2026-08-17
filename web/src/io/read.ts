@@ -1,12 +1,14 @@
 /**
  * How the viewer reads bytes.
  *
- * Everything goes through one `ReadRange` function, so swapping HTTP for
- * zipped stores or local files (Electron) later touches only this file.
+ * Everything goes through one `ReadRange` function, so a slide served over
+ * HTTP and a slide sitting on the local disk differ in exactly one line of
+ * this file. `RangeStore`, `ZipStore`, viv and deck never learn which.
  */
 
 import * as zarr from 'zarrita';
 
+import { desktopHost } from './host';
 import { ZipStore } from './zip';
 
 /**
@@ -35,6 +37,26 @@ export function httpReadRange(baseUrl: string): ReadRange {
     if (!res.ok) throw new Error(`GET ${path}: HTTP ${res.status}`);
     return new Uint8Array(await res.arrayBuffer());
   };
+}
+
+/**
+ * Read a slide off the local disk, through the desktop shell.
+ *
+ * There is no server and no HTTP: the shell reads the file and hands the
+ * bytes back. Callers cannot tell this apart from `httpReadRange`, which is
+ * the whole point — a local slide and a served one take the same path from
+ * here on.
+ */
+export function fileReadRange(slideDir: string): ReadRange {
+  const host = desktopHost();
+  if (!host) throw new Error('fileReadRange needs the desktop shell');
+  return (path, start, end) => host.readRange(slideDir, path, start, end);
+}
+
+/** Read a slide however this build can: off the disk in the desktop shell,
+ * over HTTP in a browser tab. */
+export function readerFor(slide: string): ReadRange {
+  return desktopHost() ? fileReadRange(slide) : httpReadRange(slide);
 }
 
 /** Adapt a ReadRange to zarrita's store interface. */
