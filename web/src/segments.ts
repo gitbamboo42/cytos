@@ -25,6 +25,9 @@ export interface SegmentTile {
   positions: Float32Array; // flat (x, y) pairs, world µm
   /** Dense cell id per polygon — row index into features.parquet. */
   cellIds: Uint32Array;
+  /** The same id per vertex — deck's binary accessors take one value per
+   * vertex, so per-cell colors expand through this. */
+  vertexCellIds: Uint32Array;
 }
 
 export class SegmentTileSource {
@@ -110,6 +113,7 @@ export class SegmentTileSource {
       startIndices: Uint32Array.from(starts),
       positions,
       cellIds: Uint32Array.from(ids),
+      vertexCellIds: vertexCellId,
     };
   }
 }

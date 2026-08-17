@@ -5,15 +5,12 @@
  * reads the same settings and draws them.
  */
 
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 import './panel.css';
-import {
-  autocontrast,
-  CHANNEL_COLORS,
-  type ImageLayerSpec,
-  type SegmentLayerSpec,
-} from './slide';
+import { COLOR_PRESETS, colorValueHex, RAMP_NAMES } from './colormaps';
+import type { FeatureTable } from './features';
+import { autocontrast, type ImageLayerSpec, type SegmentLayerSpec } from './slide';
 import {
   imageKey,
   segmentsKey,
@@ -24,11 +21,10 @@ import {
 } from './state';
 import type { LoadedSlide } from './viewer';
 
-const IMAGE_COLORMAPS = Object.keys(CHANNEL_COLORS);
-
 interface PanelProps {
   slide: LoadedSlide;
   settings: SlideSettings;
+  features: Record<string, FeatureTable | null>;
   onChange: (key: string, patch: Partial<ImageSettings & SegmentSettings>) => void;
   onSectionChange: (name: string, patch: Partial<SectionSettings>) => void;
 }
@@ -53,7 +49,6 @@ const styles = {
   line: { display: 'flex', alignItems: 'center', gap: 6, margin: '3px 0' },
   label: { width: 46, color: '#888' },
   num: { width: 56, color: '#aaa', textAlign: 'right' as const, fontVariantNumeric: 'tabular-nums' },
-  select: { background: '#2a2a30', color: '#ccc', border: '1px solid #444', borderRadius: 3 },
   button: {
     background: '#2a2a30',
     color: '#ccc',
@@ -63,6 +58,135 @@ const styles = {
     cursor: 'pointer',
   },
 } as const;
+
+/** A color swatch button: shows the current color, opens a small picker —
+ * the Qt panel's presets plus a free-choice input. Writes "#rrggbb"
+ * straight into the session field, same convention as the Qt viewer. */
+function ColorSwatch({
+  value,
+  onChange,
+  title,
+}: {
+  value: string; // any colormap value; displayed as the color it stands for
+  onChange: (hex: string) => void;
+  title?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const hex = colorValueHex(value);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: PointerEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener('pointerdown', close);
+    return () => window.removeEventListener('pointerdown', close);
+  }, [open]);
+
+  return (
+    <div className="dd" ref={ref}>
+      <button
+        type="button"
+        className="swatch"
+        style={{ background: hex }}
+        title={title ?? hex}
+        onClick={() => setOpen(!open)}
+      />
+      {open && (
+        <div className="swatch-pop">
+          <div className="grid">
+            {COLOR_PRESETS.map(([name, preset]) => (
+              <button
+                key={preset}
+                type="button"
+                className="swatch"
+                style={{
+                  background: preset,
+                  outline: preset === hex ? '2px solid #4b9fff' : 'none',
+                }}
+                title={name}
+                onClick={() => {
+                  onChange(preset);
+                  setOpen(false);
+                }}
+              />
+            ))}
+          </div>
+          <label className="custom">
+            <input
+              type="color"
+              value={hex}
+              onChange={(e) => onChange(e.target.value)}
+            />
+            custom
+          </label>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A web-rendered dropdown. The native <select> popup is drawn by the OS
+ * at system font size, immune to page CSS — so the list is ours instead. */
+function Dropdown({
+  value,
+  options,
+  labels,
+  onChange,
+  grow,
+}: {
+  value: string;
+  options: string[];
+  /** Display text per option; defaults to the option itself. */
+  labels?: Record<string, string>;
+  onChange: (value: string) => void;
+  grow?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: PointerEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    window.addEventListener('pointerdown', close);
+    window.addEventListener('keydown', key);
+    return () => {
+      window.removeEventListener('pointerdown', close);
+      window.removeEventListener('keydown', key);
+    };
+  }, [open]);
+
+  return (
+    <div className="dd" ref={ref} style={grow ? { flex: 1 } : undefined}>
+      <button type="button" className="dd-button" onClick={() => setOpen(!open)}>
+        <span className="dd-value">{labels?.[value] ?? value}</span>
+        <span className="dd-caret">▼</span>
+      </button>
+      {open && (
+        <div className="dd-list">
+          {options.map((option) => (
+            <div
+              key={option}
+              className={option === value ? 'dd-item selected' : 'dd-item'}
+              onClick={() => {
+                onChange(option);
+                setOpen(false);
+              }}
+            >
+              {labels?.[option] ?? option}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 /** One slider, two thumbs, a numeric input on each side. */
 function ClimControl({
@@ -169,6 +293,11 @@ function ImageRow({
           checked={settings.visible}
           onChange={(e) => onChange({ visible: e.target.checked })}
         />
+        <ColorSwatch
+          value={settings.colormap}
+          title="channel color"
+          onChange={(colormap) => onChange({ colormap })}
+        />
         <span style={styles.name}>{layer.id}</span>
         <button
           style={styles.button}
@@ -185,15 +314,6 @@ function ImageRow({
         >
           {busy ? '…' : 'auto'}
         </button>
-        <select
-          style={styles.select}
-          value={settings.colormap}
-          onChange={(e) => onChange({ colormap: e.target.value })}
-        >
-          {IMAGE_COLORMAPS.map((name) => (
-            <option key={name}>{name}</option>
-          ))}
-        </select>
       </div>
       <ClimControl value={settings.clim} onChange={(clim) => onChange({ clim })} />
     </div>
@@ -203,12 +323,16 @@ function ImageRow({
 function SegmentRow({
   layer,
   settings,
+  features,
   onChange,
 }: {
   layer: SegmentLayerSpec;
   settings: SegmentSettings;
+  features: FeatureTable | null;
   onChange: (patch: Partial<SegmentSettings>) => void;
 }) {
+  const featureNames = features?.names ?? [];
+  const coloring = settings.color_by ? features?.get(settings.color_by) : undefined;
   return (
     <div style={styles.row}>
       <div style={styles.head}>
@@ -252,11 +376,35 @@ function SegmentRow({
         />
         <span style={styles.num}>{settings.fill_opacity.toFixed(2)}</span>
       </div>
+      <div style={styles.line}>
+        <span style={styles.label}>color by</span>
+        <Dropdown
+          grow
+          value={settings.color_by ?? ''}
+          options={['', ...featureNames]}
+          labels={{ '': 'Flat color' }}
+          onChange={(value) => onChange({ color_by: value || null })}
+        />
+        {!settings.color_by && (
+          <ColorSwatch
+            value={settings.colormap}
+            title="flat cell color"
+            onChange={(colormap) => onChange({ colormap })}
+          />
+        )}
+        {coloring && !coloring.categorical && (
+          <Dropdown
+            value={settings.colormap}
+            options={RAMP_NAMES}
+            onChange={(colormap) => onChange({ colormap })}
+          />
+        )}
+      </div>
     </div>
   );
 }
 
-export function Panel({ slide, settings, onChange, onSectionChange }: PanelProps) {
+export function Panel({ slide, settings, features, onChange, onSectionChange }: PanelProps) {
   const images = slide.channels;
   const segments = slide.segments.map((s) => s.spec);
 
@@ -290,6 +438,7 @@ export function Panel({ slide, settings, onChange, onSectionChange }: PanelProps
               key={layer.id}
               layer={layer}
               settings={settings.layers[segmentsKey(layer.id)] as SegmentSettings}
+              features={features[segmentsKey(layer.id)] ?? null}
               onChange={(patch) => onChange(segmentsKey(layer.id), patch)}
             />
           ))}

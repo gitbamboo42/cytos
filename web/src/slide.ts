@@ -225,13 +225,3 @@ export async function autocontrast(
   return hi > lo ? [lo, hi] : [lo, lo + 1];
 }
 
-/** The black→hue ramps cytos names in manifests, as viv channel colors. */
-export const CHANNEL_COLORS: Record<string, [number, number, number]> = {
-  blue: [0, 0, 255],
-  green: [0, 255, 0],
-  red: [255, 0, 0],
-  cyan: [0, 255, 255],
-  magenta: [255, 0, 255],
-  yellow: [255, 255, 0],
-  gray: [255, 255, 255],
-};

@@ -9,6 +9,7 @@
 
 import { useEffect, useState } from 'react';
 
+import { loadFeatures, type FeatureTable } from './features';
 import { Panel } from './panel';
 import { SegmentTileSource } from './segments';
 import {
@@ -19,7 +20,7 @@ import {
   segmentLayers,
   stackChannels,
 } from './slide';
-import { defaultSettings, type SlideSettings } from './state';
+import { defaultSettings, segmentsKey, type SlideSettings } from './state';
 import { SlideViewer, type LoadedSlide } from './viewer';
 
 const DEFAULT_SLIDE = 'http://127.0.0.1:8787/breast_rep1_nozip.cytos';
@@ -35,6 +36,7 @@ export default function App() {
       : undefined;
   const [slide, setSlide] = useState<LoadedSlide | null>(null);
   const [settings, setSettings] = useState<SlideSettings | null>(null);
+  const [features, setFeatures] = useState<Record<string, FeatureTable | null>>({});
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -68,6 +70,25 @@ export default function App() {
     };
   }, [slideUrl]);
 
+  // Per-cell feature tables load after the first render, one fetch per
+  // segment layer — the viewer recolors as each arrives.
+  useEffect(() => {
+    if (!slide) return;
+    let cancelled = false;
+    const read = httpReadRange(slideUrl);
+    for (const source of slide.segments) {
+      const key = segmentsKey(source.spec.id);
+      loadFeatures(read, source.spec.path)
+        .then((table) => {
+          if (!cancelled) setFeatures((prev) => ({ ...prev, [key]: table }));
+        })
+        .catch((err) => console.error(`features for ${key}:`, err));
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [slide, slideUrl]);
+
   if (error) {
     return (
       <div style={{ padding: 24 }}>
@@ -87,10 +108,16 @@ export default function App() {
   }
   return (
     <>
-      <SlideViewer slide={slide} settings={settings} initialView={initialView} />
+      <SlideViewer
+        slide={slide}
+        settings={settings}
+        features={features}
+        initialView={initialView}
+      />
       <Panel
         slide={slide}
         settings={settings}
+        features={features}
         onChange={(key, patch) =>
           setSettings((prev) =>
             prev
