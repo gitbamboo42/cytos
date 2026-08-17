@@ -22,6 +22,9 @@ export interface LoadedSlide {
   channels: ImageLayerSpec[];
   loader: ChannelStackSource[];
   pixelSize: number; // µm per full-res image pixel
+  /** Largest value per channel, in `channels` order — what bounds the
+   * contrast controls. */
+  intensityMax: number[];
   segments: SegmentTileSource[];
 }
 
@@ -53,6 +56,7 @@ export async function loadSlide(read: ReadRange): Promise<LoadedSlide> {
     channels,
     loader: stackChannels(pyramids.map((p) => p.levels)),
     pixelSize: pyramids[0].pixelSize,
+    intensityMax: pyramids.map((p) => p.max),
     segments,
   };
 }

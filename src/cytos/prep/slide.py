@@ -310,6 +310,10 @@ def import_slide(
         # crushes them to near-black (see skills/developers.md).
         coarsest = np.asarray(image_levels[img.id][-1].data)
         clim = [float(v) for v in np.percentile(coarsest, [1, 99.5])]
+        # The brightest pixel, for the contrast controls' upper bound. Free
+        # here (the array is already in memory) and saves every open of every
+        # viewer from re-reading a pyramid level to find it.
+        intensity_max = float(coarsest.max())
 
         # Only now, because these levels read from `staged`, and a zarr array
         # whose chunk files have been deleted reads back as fill value -- all
@@ -326,6 +330,7 @@ def import_slide(
                 "format": IMAGE_ZIP_FORMAT if zip_stores else IMAGE_FORMAT,
                 "colormap": colormap,
                 "clim": clim,
+                "intensity_max": intensity_max,
                 "visible": True,
             }
         )

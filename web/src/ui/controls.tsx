@@ -8,7 +8,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 import './panel.css';
-import { COLOR_PRESETS, colorValueHex } from '../core/colormaps';
 import type { SectionSettings } from '../core/session';
 
 export const styles = {
@@ -40,74 +39,6 @@ export const styles = {
     cursor: 'pointer',
   },
 } as const;
-
-/** A color swatch button: shows the current color, opens a small picker —
- * the Qt panel's presets plus a free-choice input. Writes "#rrggbb"
- * straight into the session field, same convention as the Qt viewer. */
-export function ColorSwatch({
-  value,
-  onChange,
-  title,
-}: {
-  value: string; // any colormap value; displayed as the color it stands for
-  onChange: (hex: string) => void;
-  title?: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const hex = colorValueHex(value);
-
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: PointerEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
-    };
-    window.addEventListener('pointerdown', close);
-    return () => window.removeEventListener('pointerdown', close);
-  }, [open]);
-
-  return (
-    <div className="dd" ref={ref}>
-      <button
-        type="button"
-        className="swatch"
-        style={{ background: hex }}
-        title={title ?? hex}
-        onClick={() => setOpen(!open)}
-      />
-      {open && (
-        <div className="swatch-pop">
-          <div className="grid">
-            {COLOR_PRESETS.map(([name, preset]) => (
-              <button
-                key={preset}
-                type="button"
-                className="swatch"
-                style={{
-                  background: preset,
-                  outline: preset === hex ? '2px solid #4b9fff' : 'none',
-                }}
-                title={name}
-                onClick={() => {
-                  onChange(preset);
-                  setOpen(false);
-                }}
-              />
-            ))}
-          </div>
-          <label className="custom">
-            <input
-              type="color"
-              value={hex}
-              onChange={(e) => onChange(e.target.value)}
-            />
-            custom
-          </label>
-        </div>
-      )}
-    </div>
-  );
-}
 
 /** A web-rendered dropdown. The native <select> popup is drawn by the OS
  * at system font size, immune to page CSS — so the list is ours instead. */
@@ -170,28 +101,37 @@ export function Dropdown({
   );
 }
 
-/** One slider, two thumbs, a numeric input on each side. */
+/** One slider, two thumbs, a numeric input on each side.
+ *
+ * `top` is the channel's own maximum with 20% headroom, the same bound the
+ * Qt panel uses (`intensity_max` in `src/cytos/ui/main_window.py`), and it
+ * limits the number boxes as well as the slider. Dragging far past a
+ * channel's brightest pixel only produces black frames, and a fixed span
+ * would squeeze every handle on a dim channel into the first few percent of
+ * the groove. */
 export function ClimControl({
   value,
+  top,
   onChange,
 }: {
   value: [number, number];
+  top: number;
   onChange: (clim: [number, number]) => void;
 }) {
   const [lo, hi] = value;
-  // A generous but not full-uint16 span, so the usable part of the slider
-  // isn't a sliver; typing a bigger number widens it.
-  const top = Math.max(1000, hi * 2);
-  const pct = (v: number) => `${(100 * v) / top}%`;
+  const pct = (v: number) => `${(100 * Math.min(v, top)) / top}%`;
+  const clamp = (v: number) => Math.max(0, Math.min(v, top));
 
-  const setLo = (v: number) => onChange([Math.max(0, Math.min(v, hi - 1)), hi]);
-  const setHi = (v: number) => onChange([lo, Math.max(v, lo + 1)]);
+  const setLo = (v: number) => onChange([Math.min(clamp(v), hi - 1), hi]);
+  const setHi = (v: number) => onChange([lo, Math.max(clamp(v), lo + 1)]);
 
   return (
     <div style={styles.line}>
       <input
         className="panel-num"
         type="number"
+        min={0}
+        max={top}
         value={Math.round(lo)}
         onChange={(e) => setLo(Number(e.target.value))}
       />
@@ -218,6 +158,8 @@ export function ClimControl({
       <input
         className="panel-num"
         type="number"
+        min={0}
+        max={top}
         value={Math.round(hi)}
         onChange={(e) => setHi(Number(e.target.value))}
       />

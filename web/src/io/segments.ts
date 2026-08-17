@@ -22,7 +22,9 @@ import { openStore, type ReadRange } from './read';
 const FORMATS = { dir: 'zarr-tiles-v1', zip: 'zarr-zip-tiles-v1' };
 
 export interface SegmentTile {
-  /** One polygon per cell: ring i is positions[startIndices[i]..startIndices[i+1]]. */
+  /** One polygon per cell: ring i is positions[startIndices[i]..startIndices[i+1]].
+   * Rings are **closed** — the first vertex is repeated at the end, which
+   * both deck layers rely on (see the note in `tileInner`). */
   length: number;
   startIndices: Uint32Array;
   positions: Float32Array; // flat (x, y) pairs, world µm
@@ -102,24 +104,57 @@ export class SegmentTileSource {
       load('vertex_cell_id') as Promise<Uint32Array>,
     ]);
 
-    // Runs of vertex_cell_id -> ring startIndices plus one id per ring.
+    // Runs of vertex_cell_id -> one ring per cell.
     const n = vertexCellId.length;
-    const starts: number[] = [0];
+    const runStarts: number[] = [0];
     const ids: number[] = n ? [vertexCellId[0]] : [];
     for (let i = 1; i < n; i++) {
       if (vertexCellId[i] !== vertexCellId[i - 1]) {
-        starts.push(i);
+        runStarts.push(i);
         ids.push(vertexCellId[i]);
       }
     }
-    starts.push(n);
+    runStarts.push(n);
+
+    // Repeat each ring's first vertex at its end, so every ring is closed.
+    //
+    // The store holds open rings (last vertex != first), and deck.gl cannot
+    // close them for us: `_pathType: 'loop'` reaches PathTesselator as
+    // `opts.loop`, but the only reader of that flag is `isClosed(path)`,
+    // and `_updateSegmentTypes` calls it as `path ? this.isClosed(path) :
+    // false`. With binary attributes `getGeometryFromBuffer` returns null,
+    // so `path` is always null and the flag is silently ignored — every
+    // outline renders with a gap between its last and first vertex. The
+    // fill needs it too: `_normalize: false` means deck trusts the rings as
+    // given rather than closing them itself.
+    //
+    // One extra vertex per cell, ~4% on a 24-vertex ring, paid once per
+    // tile at load — not per frame.
+    const nCells = ids.length;
+    const closedPositions = new Float32Array((n + nCells) * 2);
+    const closedCellIds = new Uint32Array(n + nCells);
+    const startIndices = new Uint32Array(nCells + 1);
+    let out = 0;
+    for (let ring = 0; ring < nCells; ring++) {
+      const from = runStarts[ring];
+      const to = runStarts[ring + 1];
+      startIndices[ring] = out;
+      closedPositions.set(positions.subarray(from * 2, to * 2), out * 2);
+      closedCellIds.fill(vertexCellId[from], out, out + (to - from));
+      out += to - from;
+      closedPositions[out * 2] = positions[from * 2];
+      closedPositions[out * 2 + 1] = positions[from * 2 + 1];
+      closedCellIds[out] = vertexCellId[from];
+      out += 1;
+    }
+    startIndices[nCells] = out;
 
     return {
-      length: ids.length,
-      startIndices: Uint32Array.from(starts),
-      positions,
+      length: nCells,
+      startIndices,
+      positions: closedPositions,
       cellIds: Uint32Array.from(ids),
-      vertexCellIds: vertexCellId,
+      vertexCellIds: closedCellIds,
     };
   }
 }

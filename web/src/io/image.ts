@@ -19,6 +19,11 @@ export interface ImagePyramid {
   levels: ZarrPixelSource<[]>[]; // full resolution first
   /** World units (µm) per full-resolution pixel, from the NGFF scale. */
   pixelSize: number;
+  /** Largest value in the channel — what bounds the contrast controls. A
+   * slider scaled to a fixed span instead is unusable on a dim channel:
+   * pancreas peaks at 2163 but kidney's dimmest at 29, so every handle would
+   * sit in the first percent of the groove. */
+  max: number;
 }
 
 export async function openImagePyramid(
@@ -44,7 +49,22 @@ export async function openImagePyramid(
 
   const transforms = multiscale.datasets[0].coordinateTransformations ?? [];
   const scale = transforms.find((t: { type: string }) => t.type === 'scale');
-  return { levels, pixelSize: scale ? scale.scale[scale.scale.length - 1] : 1 };
+
+  // The importer measures the brightest pixel and records it, so normally
+  // this costs nothing. Only a slide written before that field existed makes
+  // us read the coarsest level to find it -- a few hundred KB, once.
+  let max = layer.intensity_max;
+  if (max === undefined) {
+    const { data } = await levels[levels.length - 1].getRaster({ selection: {} });
+    max = 0;
+    for (let i = 0; i < data.length; i++) if (data[i] > max) max = data[i];
+  }
+
+  return {
+    levels,
+    pixelSize: scale ? scale.scale[scale.scale.length - 1] : 1,
+    max: Math.max(1, max),
+  };
 }
 
 type Selection = Record<string, number>;

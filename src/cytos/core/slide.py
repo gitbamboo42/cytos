@@ -82,6 +82,10 @@ class ImageLayer:
     colormap: str
     format: str = IMAGE_FORMAT
     clim: tuple[float, float] | None = None
+    # Largest value anywhere in the channel, measured at import. Bounds the
+    # contrast controls in both viewers; None on slides written before it was
+    # recorded, which makes the viewer measure it at open instead.
+    intensity_max: float | None = None
     visible: bool = True
 
 
@@ -190,6 +194,11 @@ def load_slide(path: Path | str) -> Slide:
                     colormap=layer.get("colormap", DEFAULT_CHANNEL_COLORMAPS[0]),
                     format=layer.get("format", IMAGE_FORMAT),
                     clim=tuple(float(v) for v in clim) if clim else None,
+                    intensity_max=(
+                        float(layer["intensity_max"])
+                        if layer.get("intensity_max") is not None
+                        else None
+                    ),
                     visible=bool(layer.get("visible", True)),
                 )
             )

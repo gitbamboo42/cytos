@@ -13,6 +13,9 @@ export interface ImageLayerSpec {
   format: string;
   colormap: string;
   clim?: [number, number];
+  /** Largest value in the channel, measured at import. Absent on slides
+   * written before it was recorded, which makes the reader measure it. */
+  intensity_max?: number;
   visible?: boolean;
 }
 

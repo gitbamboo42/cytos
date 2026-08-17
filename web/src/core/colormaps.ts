@@ -34,12 +34,23 @@ const RAMPS: Record<string, RGB[]> = {
     [208, 73, 69], [225, 92, 52], [238, 114, 33], [247, 140, 12], [251, 168, 13],
     [252, 255, 164],
   ],
+  cividis: [
+    [0, 34, 78], [0, 46, 108], [30, 58, 111], [53, 69, 108], [71, 81, 108],
+    [87, 93, 109], [102, 105, 112], [117, 117, 117], [132, 130, 121], [148, 142, 119],
+    [165, 156, 116], [183, 169, 110], [200, 184, 102], [219, 199, 90], [238, 214, 73],
+    [254, 232, 56],
+  ],
   gray: [
     [0, 0, 0], [255, 255, 255],
   ],
 };
 
-export const RAMP_NAMES = Object.keys(RAMPS);
+/** The ramps offered for colouring cells by a feature, in the Qt viewer's
+ * order — same list as `CHANNEL_RAMP_CHOICES` in `src/cytos/render/image.py`.
+ * Image *channels* take a flat colour only: viv's ColorPaletteExtension is
+ * one RGB per channel, and per-channel ramps would need a custom LUT
+ * extension (see the note in render/image.ts). */
+export const RAMP_NAMES = ['gray', 'viridis', 'magma', 'plasma', 'inferno', 'cividis'];
 
 /** matplotlib tab20, in its interleaved dark/light order. */
 export const TAB20: RGB[] = [
@@ -129,4 +140,34 @@ export function rampLut(name: string, alpha = 255): Uint8Array {
     lut[i * 4 + 3] = alpha;
   }
   return lut;
+}
+
+// -- HSV, for the inline picker -------------------------------------------
+
+export function hexToHsv(hex: string): [number, number, number] {
+  const [r, g, b] = (hexToRgb(hex) ?? [0, 0, 0]).map((v) => v / 255);
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const d = max - min;
+  let h = 0;
+  if (d !== 0) {
+    if (max === r) h = ((g - b) / d) % 6;
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h /= 6;
+    if (h < 0) h += 1;
+  }
+  return [h, max === 0 ? 0 : d / max, max];
+}
+
+export function hsvToHex(h: number, s: number, v: number): string {
+  const i = Math.floor(h * 6);
+  const f = h * 6 - i;
+  const p = v * (1 - s);
+  const q = v * (1 - f * s);
+  const t = v * (1 - (1 - f) * s);
+  const [r, g, b] = [
+    [v, t, p], [q, v, p], [p, v, t], [p, q, v], [t, p, v], [v, p, q],
+  ][i % 6];
+  return rgbToHex([r, g, b].map((c) => Math.round(c * 255)) as RGB);
 }

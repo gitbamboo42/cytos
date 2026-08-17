@@ -18,7 +18,12 @@ import type { Feature, FeatureTable } from '../io/features';
 import type { SegmentTileSource } from '../io/segments';
 import type { LoadedSlide } from '../io/slide';
 
-const OUTLINE_ALPHA = 220;
+/** Outline width and alpha, matching the Qt renderer so the two viewers
+ * look alike: `LineSegmentMaterial(thickness=1.5, thickness_space="screen")`
+ * in `src/cytos/render/polygons.py`, coloured from a matplotlib LUT whose
+ * alpha is 255. A 1 px line at alpha 220 reads as visibly fainter. */
+const OUTLINE_WIDTH = 1.5;
+const OUTLINE_ALPHA = 255;
 
 /** One tile's arrays, wrapped the way deck's binary-attribute path wants
  * them — built once per tile in getTileData (see the note there). The
@@ -203,9 +208,13 @@ export function segmentTileLayer(
           new PathLayer({
             id: `${props.id}-outline`,
             data: tile.path,
-            _pathType: 'loop',
+            // 'open', not 'loop': the reader already repeated each ring's
+            // first vertex, because deck ignores 'loop' for binary input
+            // (see the note in io/segments.ts). Any non-null value is what
+            // turns deck's own path normalization off, which is the point.
+            _pathType: 'open',
             positionFormat: 'XY',
-            getWidth: 1,
+            getWidth: OUTLINE_WIDTH,
             widthUnits: 'pixels',
             modelMatrix: worldToPixels,
             updateTriggers: { getColor: colorKey },

@@ -17,6 +17,7 @@ import { loadFeatures, type FeatureTable } from './io/features';
 import { httpReadRange } from './io/read';
 import { loadSlide, type LoadedSlide } from './io/slide';
 import { SlideViewer } from './render/scene';
+import type { CustomColors } from './ui/color-picker';
 import { Panel } from './ui/panel';
 
 const DEFAULT_SLIDE = 'http://127.0.0.1:8787/pancreas_ffpe.cytos';
@@ -34,6 +35,17 @@ export default function App() {
   const [settings, setSettings] = useState<SlideSettings | null>(null);
   const [features, setFeatures] = useState<Record<string, FeatureTable | null>>({});
   const [error, setError] = useState<string | null>(null);
+  // One pool of user-created colors for the whole window, shared by every
+  // picker — a color mixed while tuning one layer is a one-click swatch on
+  // the next. The Qt viewer saves this in the session (`custom_colors`);
+  // the web viewer has no session file yet, so it lasts the page.
+  const [customColors, setCustomColors] = useState<string[]>([]);
+  const custom: CustomColors = {
+    colors: customColors,
+    add: (hex) =>
+      setCustomColors((prev) => (prev.includes(hex) ? prev : [...prev, hex])),
+    remove: (hex) => setCustomColors((prev) => prev.filter((c) => c !== hex)),
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -99,6 +111,7 @@ export default function App() {
         slide={slide}
         settings={settings}
         features={features}
+        custom={custom}
         onChange={(key, patch) =>
           setSettings((prev) =>
             prev

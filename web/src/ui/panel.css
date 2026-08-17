@@ -95,7 +95,9 @@
   appearance: textfield;
 }
 
-/* Color swatch button + its picker popup, web-rendered. */
+/* Color swatch button, and the picker popup — laid out like the Qt one
+   (src/cytos/ui/color_picker.py): labelled sections, an 8-wide swatch grid,
+   the pocket picker, and a hover label naming what's under the cursor. */
 
 .swatch {
   width: 16px;
@@ -111,41 +113,173 @@
   border-color: #ccc;
 }
 
-.swatch-pop {
+.cp-pop {
   position: absolute;
   top: 100%;
   left: 0;
   margin-top: 2px;
-  padding: 6px;
+  padding: 8px 10px;
   background: #232328;
   border: 1px solid #4a4a52;
   border-radius: 3px;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
-  z-index: 10;
+  z-index: 20;
+  width: max-content;
 }
 
-.swatch-pop .grid {
-  display: grid;
-  grid-template-columns: repeat(4, 18px);
-  gap: 5px;
-}
-
-.swatch-pop .custom {
+.cp-section {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-top: 6px;
+  margin: 6px 0 4px;
   color: #888;
+  font-size: 10px;
 }
 
-.swatch-pop input[type='color'] {
+.cp-section:first-child {
+  margin-top: 0;
+}
+
+.cp-section hr {
+  flex: 1;
+  height: 0;
+  margin: 0;
+  border: 0;
+  border-top: 1px solid #3a3a42;
+}
+
+.cp-grid {
+  display: grid;
+  gap: 4px;
+  justify-content: start;
+}
+
+.cp-swatch {
   width: 18px;
   height: 18px;
   padding: 0;
   border: 1px solid #777;
-  border-radius: 3px;
-  background: none;
+  border-radius: 2px;
   cursor: pointer;
+  background: none;
+}
+
+.cp-swatch:hover {
+  border: 2px solid #4b9fff;
+}
+
+/* Selected outranks hover, as in the Qt picker. */
+.cp-swatch.selected,
+.cp-swatch.selected:hover {
+  border: 2px solid #eee;
+}
+
+.cp-text {
+  color: #ccc;
+  background: #2a2a30;
+  font: inherit;
+  line-height: 1;
+}
+
+.cp-text:disabled {
+  color: #555;
+  cursor: default;
+  border-color: #444;
+}
+
+.cp-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.cp-picker {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cp-shade {
+  position: relative;
+  height: 96px;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.cp-shade-dark {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0), #000);
+}
+
+.cp-dot {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  border: 1px solid #000;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px #fff;
+  pointer-events: none;
+}
+
+.cp-hue {
+  position: relative;
+  height: 12px;
+  cursor: crosshair;
+  touch-action: none;
+  background: linear-gradient(
+    to right,
+    #f00 0%, #ff0 17%, #0f0 33%, #0ff 50%, #00f 67%, #f0f 83%, #f00 100%
+  );
+}
+
+.cp-hue-mark {
+  position: absolute;
+  top: 0;
+  width: 4px;
+  height: 100%;
+  margin-left: -2px;
+  border: 1px solid #000;
+  box-shadow: inset 0 0 0 1px #fff;
+  pointer-events: none;
+}
+
+.cp-hex-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cp-hex {
+  width: 72px;
+  background: #2a2a30;
+  color: #ccc;
+  border: 1px solid #444;
+  border-radius: 3px;
+  font: inherit;
+  padding: 1px 4px;
+}
+
+.cp-add {
+  margin-left: auto;
+  background: #2a2a30;
+  color: #ccc;
+  border: 1px solid #444;
+  border-radius: 3px;
+  font: inherit;
+  padding: 1px 8px;
+  cursor: pointer;
+}
+
+.cp-hover {
+  margin-top: 6px;
+  min-height: 14px;
+  color: #999;
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 /* Custom dropdown — the native <select> popup is drawn by the OS at system

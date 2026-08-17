@@ -12,17 +12,20 @@ import type { ImageSettings, SegmentSettings } from '../core/session';
 import type { FeatureTable } from '../io/features';
 import type { LoadedSlide } from '../io/slide';
 import { autocontrast } from '../render/image';
-import { ClimControl, ColorSwatch, Dropdown, styles } from './controls';
+import { ColorSwatch, type CustomColors } from './color-picker';
+import { ClimControl, Dropdown, styles } from './controls';
 
 export function ImageRow({
   layer,
   slide,
   settings,
+  custom,
   onChange,
 }: {
   layer: ImageLayerSpec;
   slide: LoadedSlide;
   settings: ImageSettings;
+  custom: CustomColors;
   onChange: (patch: Partial<ImageSettings>) => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -39,6 +42,7 @@ export function ImageRow({
         <ColorSwatch
           value={settings.colormap}
           title="channel color"
+          custom={custom}
           onChange={(colormap) => onChange({ colormap })}
         />
         <span style={styles.name}>{layer.id}</span>
@@ -58,7 +62,11 @@ export function ImageRow({
           {busy ? '…' : 'auto'}
         </button>
       </div>
-      <ClimControl value={settings.clim} onChange={(clim) => onChange({ clim })} />
+      <ClimControl
+        value={settings.clim}
+        top={slide.intensityMax[channel] * 1.2}
+        onChange={(clim) => onChange({ clim })}
+      />
     </div>
   );
 }
@@ -67,11 +75,13 @@ export function SegmentRow({
   layer,
   settings,
   features,
+  custom,
   onChange,
 }: {
   layer: SegmentLayerSpec;
   settings: SegmentSettings;
   features: FeatureTable | null;
+  custom: CustomColors;
   onChange: (patch: Partial<SegmentSettings>) => void;
 }) {
   const featureNames = features?.names ?? [];
@@ -132,6 +142,7 @@ export function SegmentRow({
           <ColorSwatch
             value={settings.colormap}
             title="flat cell color"
+            custom={custom}
             onChange={(colormap) => onChange({ colormap })}
           />
         )}
