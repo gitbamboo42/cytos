@@ -1,35 +1,17 @@
 /**
- * The layers dock: one collapsible section per layer kind, one row of
- * controls per layer. It edits a SlideSettings object (the saved-session
- * vocabulary, see state.ts) and knows nothing about deck.gl — the viewer
- * reads the same settings and draws them.
+ * The panel's building blocks: a color swatch, a dropdown, a two-thumb
+ * contrast slider, a collapsible section — plus the shared row styles.
+ *
+ * Nothing here knows what a layer is. The rows in `rows.tsx` compose these.
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 import './panel.css';
-import { COLOR_PRESETS, colorValueHex, RAMP_NAMES } from './colormaps';
-import type { FeatureTable } from './features';
-import { autocontrast, type ImageLayerSpec, type SegmentLayerSpec } from './slide';
-import {
-  imageKey,
-  segmentsKey,
-  type ImageSettings,
-  type SectionSettings,
-  type SegmentSettings,
-  type SlideSettings,
-} from './state';
-import type { LoadedSlide } from './viewer';
+import { COLOR_PRESETS, colorValueHex } from '../core/colormaps';
+import type { SectionSettings } from '../core/session';
 
-interface PanelProps {
-  slide: LoadedSlide;
-  settings: SlideSettings;
-  features: Record<string, FeatureTable | null>;
-  onChange: (key: string, patch: Partial<ImageSettings & SegmentSettings>) => void;
-  onSectionChange: (name: string, patch: Partial<SectionSettings>) => void;
-}
-
-const styles = {
+export const styles = {
   panel: {
     position: 'absolute',
     top: 0,
@@ -62,7 +44,7 @@ const styles = {
 /** A color swatch button: shows the current color, opens a small picker —
  * the Qt panel's presets plus a free-choice input. Writes "#rrggbb"
  * straight into the session field, same convention as the Qt viewer. */
-function ColorSwatch({
+export function ColorSwatch({
   value,
   onChange,
   title,
@@ -129,7 +111,7 @@ function ColorSwatch({
 
 /** A web-rendered dropdown. The native <select> popup is drawn by the OS
  * at system font size, immune to page CSS — so the list is ours instead. */
-function Dropdown({
+export function Dropdown({
   value,
   options,
   labels,
@@ -189,7 +171,7 @@ function Dropdown({
 }
 
 /** One slider, two thumbs, a numeric input on each side. */
-function ClimControl({
+export function ClimControl({
   value,
   onChange,
 }: {
@@ -243,7 +225,7 @@ function ClimControl({
   );
 }
 
-function Section({
+export function Section({
   title,
   settings,
   onChange,
@@ -267,183 +249,6 @@ function Section({
         <span className="title">{title}</span>
       </div>
       {settings.expanded && children}
-    </div>
-  );
-}
-
-function ImageRow({
-  layer,
-  slide,
-  settings,
-  onChange,
-}: {
-  layer: ImageLayerSpec;
-  slide: LoadedSlide;
-  settings: ImageSettings;
-  onChange: (patch: Partial<ImageSettings>) => void;
-}) {
-  const [busy, setBusy] = useState(false);
-  const channel = slide.channels.findIndex((c) => c.id === layer.id);
-
-  return (
-    <div style={styles.row}>
-      <div style={styles.head}>
-        <input
-          type="checkbox"
-          checked={settings.visible}
-          onChange={(e) => onChange({ visible: e.target.checked })}
-        />
-        <ColorSwatch
-          value={settings.colormap}
-          title="channel color"
-          onChange={(colormap) => onChange({ colormap })}
-        />
-        <span style={styles.name}>{layer.id}</span>
-        <button
-          style={styles.button}
-          disabled={busy}
-          title="contrast from the 1st/99.5th percentile"
-          onClick={async () => {
-            setBusy(true);
-            try {
-              onChange({ clim: await autocontrast(slide.loader, channel) });
-            } finally {
-              setBusy(false);
-            }
-          }}
-        >
-          {busy ? '…' : 'auto'}
-        </button>
-      </div>
-      <ClimControl value={settings.clim} onChange={(clim) => onChange({ clim })} />
-    </div>
-  );
-}
-
-function SegmentRow({
-  layer,
-  settings,
-  features,
-  onChange,
-}: {
-  layer: SegmentLayerSpec;
-  settings: SegmentSettings;
-  features: FeatureTable | null;
-  onChange: (patch: Partial<SegmentSettings>) => void;
-}) {
-  const featureNames = features?.names ?? [];
-  const coloring = settings.color_by ? features?.get(settings.color_by) : undefined;
-  return (
-    <div style={styles.row}>
-      <div style={styles.head}>
-        <input
-          type="checkbox"
-          checked={settings.visible}
-          onChange={(e) => onChange({ visible: e.target.checked })}
-        />
-        <span style={styles.name}>
-          {layer.id} <span style={{ color: '#777' }}>({layer.n_cells.toLocaleString()})</span>
-        </span>
-      </div>
-      <div style={styles.line}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <input
-            type="checkbox"
-            checked={settings.show_outline}
-            onChange={(e) => onChange({ show_outline: e.target.checked })}
-          />
-          outline
-        </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 12 }}>
-          <input
-            type="checkbox"
-            checked={settings.show_fill}
-            onChange={(e) => onChange({ show_fill: e.target.checked })}
-          />
-          fill
-        </label>
-      </div>
-      <div style={styles.line}>
-        <span style={styles.label}>opacity</span>
-        <input
-          type="range"
-          style={{ flex: 1, minWidth: 0 }}
-          min={0.05}
-          max={1}
-          step={0.05}
-          value={settings.fill_opacity}
-          onChange={(e) => onChange({ fill_opacity: Number(e.target.value) })}
-        />
-        <span style={styles.num}>{settings.fill_opacity.toFixed(2)}</span>
-      </div>
-      <div style={styles.line}>
-        <span style={styles.label}>color by</span>
-        <Dropdown
-          grow
-          value={settings.color_by ?? ''}
-          options={['', ...featureNames]}
-          labels={{ '': 'Flat color' }}
-          onChange={(value) => onChange({ color_by: value || null })}
-        />
-        {!settings.color_by && (
-          <ColorSwatch
-            value={settings.colormap}
-            title="flat cell color"
-            onChange={(colormap) => onChange({ colormap })}
-          />
-        )}
-        {coloring && !coloring.categorical && (
-          <Dropdown
-            value={settings.colormap}
-            options={RAMP_NAMES}
-            onChange={(colormap) => onChange({ colormap })}
-          />
-        )}
-      </div>
-    </div>
-  );
-}
-
-export function Panel({ slide, settings, features, onChange, onSectionChange }: PanelProps) {
-  const images = slide.channels;
-  const segments = slide.segments.map((s) => s.spec);
-
-  return (
-    <div style={styles.panel}>
-      {images.length > 0 && (
-        <Section
-          title="Images"
-          settings={settings.sections.images}
-          onChange={(patch) => onSectionChange('images', patch)}
-        >
-          {images.map((layer) => (
-            <ImageRow
-              key={layer.id}
-              layer={layer}
-              slide={slide}
-              settings={settings.layers[imageKey(layer.id)] as ImageSettings}
-              onChange={(patch) => onChange(imageKey(layer.id), patch)}
-            />
-          ))}
-        </Section>
-      )}
-      {segments.length > 0 && (
-        <Section
-          title="Segments"
-          settings={settings.sections.segments}
-          onChange={(patch) => onSectionChange('segments', patch)}
-        >
-          {segments.map((layer) => (
-            <SegmentRow
-              key={layer.id}
-              layer={layer}
-              settings={settings.layers[segmentsKey(layer.id)] as SegmentSettings}
-              features={features[segmentsKey(layer.id)] ?? null}
-              onChange={(patch) => onChange(segmentsKey(layer.id), patch)}
-            />
-          ))}
-        </Section>
-      )}
     </div>
   );
 }

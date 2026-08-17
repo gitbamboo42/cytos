@@ -2,28 +2,24 @@
  * Load a `.cytos` slide from a URL and hand it to the viewer.
  *
  * Point it at a slide with `?slide=<url>`, e.g.
- *   http://localhost:5173/?slide=http://127.0.0.1:8787/breast_rep1_nozip.cytos
+ *   http://localhost:5173/?slide=http://127.0.0.1:8787/pancreas_ffpe.cytos
  * (that default is filled in when the param is missing). The slide server is
  * `tools/serve_slides.py`.
+ *
+ * Wiring only: read the URL params, load, hold the settings. What loading
+ * means is `io/slide.ts`; what the settings mean is `core/session.ts`.
  */
 
 import { useEffect, useState } from 'react';
 
-import { loadFeatures, type FeatureTable } from './features';
-import { Panel } from './panel';
-import { SegmentTileSource } from './segments';
-import {
-  fetchManifest,
-  httpReadRange,
-  imageLayers,
-  openImagePyramid,
-  segmentLayers,
-  stackChannels,
-} from './slide';
-import { defaultSettings, segmentsKey, type SlideSettings } from './state';
-import { SlideViewer, type LoadedSlide } from './viewer';
+import { defaultSettings, segmentsKey, type SlideSettings } from './core/session';
+import { loadFeatures, type FeatureTable } from './io/features';
+import { httpReadRange } from './io/read';
+import { loadSlide, type LoadedSlide } from './io/slide';
+import { SlideViewer } from './render/scene';
+import { Panel } from './ui/panel';
 
-const DEFAULT_SLIDE = 'http://127.0.0.1:8787/breast_rep1_nozip.cytos';
+const DEFAULT_SLIDE = 'http://127.0.0.1:8787/pancreas_ffpe.cytos';
 
 export default function App() {
   const params = new URLSearchParams(window.location.search);
@@ -41,30 +37,15 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      const read = httpReadRange(slideUrl);
-      const manifest = await fetchManifest(read);
-      const channels = imageLayers(manifest);
-      if (channels.length === 0) throw new Error('slide has no image layers');
-      const pyramids = await Promise.all(
-        channels.map((layer) => openImagePyramid(read, layer)),
-      );
-      const segments = segmentLayers(manifest).map(
-        (spec) => new SegmentTileSource(read, spec),
-      );
-      if (!cancelled) {
-        setSlide({
-          manifest,
-          channels,
-          loader: stackChannels(pyramids.map((p) => p.levels)),
-          pixelSize: pyramids[0].pixelSize,
-          segments,
-        });
-        setSettings(defaultSettings(manifest));
-      }
-    })().catch((err) => {
-      if (!cancelled) setError(String(err));
-    });
+    loadSlide(httpReadRange(slideUrl))
+      .then((loaded) => {
+        if (cancelled) return;
+        setSlide(loaded);
+        setSettings(defaultSettings(loaded.manifest));
+      })
+      .catch((err) => {
+        if (!cancelled) setError(String(err));
+      });
     return () => {
       cancelled = true;
     };

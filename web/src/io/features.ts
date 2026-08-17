@@ -17,7 +17,7 @@ import initParquetWasm, { readParquet } from 'parquet-wasm/esm';
 // it relative to import.meta.url breaks under the dev server's pre-bundling.
 import parquetWasmUrl from 'parquet-wasm/esm/parquet_wasm_bg.wasm?url';
 
-import type { ReadRange } from './slide';
+import type { ReadRange } from './read';
 
 // Numeric but not a measurement of the cell: ids are arbitrary labels and
 // the centroids re-encode position. Same list as the Qt viewer's

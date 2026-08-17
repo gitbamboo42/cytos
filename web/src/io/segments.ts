@@ -16,7 +16,10 @@
 
 import * as zarr from 'zarrita';
 
-import { RangeStore, type ReadRange, type SegmentLayerSpec } from './slide';
+import type { SegmentLayerSpec } from '../core/manifest';
+import { openStore, type ReadRange } from './read';
+
+const FORMATS = { dir: 'zarr-tiles-v1', zip: 'zarr-zip-tiles-v1' };
 
 export interface SegmentTile {
   /** One polygon per cell: ring i is positions[startIndices[i]..startIndices[i+1]]. */
@@ -31,20 +34,22 @@ export interface SegmentTile {
 }
 
 export class SegmentTileSource {
-  private root: zarr.Location<RangeStore>;
+  /** Opening a zipped store reads its central directory, so the root is a
+   * promise — started once here, awaited by every tile, never repeated. */
+  private root: Promise<zarr.Location<zarr.AsyncReadable>>;
   private tiles: Set<string>;
 
   constructor(
     read: ReadRange,
     readonly spec: SegmentLayerSpec,
   ) {
-    if (spec.format !== 'zarr-tiles-v1') {
-      throw new Error(
-        `segment layer "${spec.id}" has format "${spec.format}" — this reader ` +
-          `only handles plain directories yet (re-import with --no-zip)`,
-      );
-    }
-    this.root = zarr.root(new RangeStore(read, `${spec.path}/tiles.zarr`));
+    this.root = openStore(
+      read,
+      `segment layer "${spec.id}"`,
+      spec.format,
+      `${spec.path}/tiles.zarr`,
+      FORMATS,
+    ).then((store) => zarr.root(store));
     this.tiles = new Set(spec.tiles.map(([r, c]) => `${r},${c}`));
   }
 
@@ -86,9 +91,10 @@ export class SegmentTileSource {
 
   private async tileInner(row: number, col: number): Promise<SegmentTile> {
 
+    const root = await this.root;
     const load = async (name: string) => {
       const path = `tile/${this.spec.tile_depth}/${row}/${col}/${name}`;
-      const arr = await zarr.open.v3(this.root.resolve(path), { kind: 'array' });
+      const arr = await zarr.open.v3(root.resolve(path), { kind: 'array' });
       return (await zarr.get(arr as zarr.Array<zarr.NumberDataType>)).data;
     };
     const [positions, vertexCellId] = await Promise.all([

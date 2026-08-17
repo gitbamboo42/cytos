@@ -8,11 +8,7 @@
  * command — is a plain merge, not a translation.
  */
 
-import {
-  imageLayers,
-  segmentLayers,
-  type SlideManifest,
-} from './slide';
+import { imageLayers, segmentLayers, type SlideManifest } from './manifest';
 
 export interface ImageSettings {
   visible: boolean;

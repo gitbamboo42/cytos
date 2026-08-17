@@ -1,48 +1,22 @@
 /**
- * The DeckGL scene: viv's MultiscaleImageLayer for the morphology image,
- * one TileLayer per segment layer for the polygons.
- *
- * View space is the image's full-resolution **pixel grid** (what viv's
- * layers render in natively); polygon coordinates arrive in world µm and are
- * scaled into it with a modelMatrix, so the geometry buffers stay exactly
- * what the store holds. Y increases downward in both spaces — deck's
- * OrthographicView already puts y down (flipY default), so like the Qt
- * viewer there is exactly one place display orientation lives: the view.
- *
- * Each polygon tile draws as two sublayers from the same binary arrays:
- * a SolidPolygonLayer fill that doubles as the pick surface (kept even at
- * opacity 0 — same trick as the Qt renderer, where hiding the fill would
- * kill hover picking), and a PathLayer with `_pathType: 'loop'` for the
- * ring outlines.
+ * Polygon layers: one deck TileLayer per segment layer, each tile drawn as
+ * two sublayers from the same binary arrays — a SolidPolygonLayer fill that
+ * doubles as the pick surface (kept even at opacity 0, same trick as the Qt
+ * renderer, where hiding the fill would kill hover picking), and a PathLayer
+ * with `_pathType: 'loop'` for the ring outlines.
  */
 
-import { OrthographicView, type PickingInfo } from '@deck.gl/core';
-import { Matrix4 } from '@math.gl/core';
 import { TileLayer } from '@deck.gl/geo-layers';
 import { PathLayer, SolidPolygonLayer } from '@deck.gl/layers';
-import DeckGL from '@deck.gl/react';
-import { ColorPaletteExtension, MultiscaleImageLayer } from '@hms-dbmi/viv';
+import type { PickingInfo } from '@deck.gl/core';
+import { Matrix4 } from '@math.gl/core';
 
-import { colorValueRgb, rampLut, TAB20, UNASSIGNED_COLOR } from './colormaps';
-import type { Feature, FeatureTable } from './features';
-import type { SegmentTileSource } from './segments';
-import { tileWorldSize, type ImageLayerSpec, type SlideManifest } from './slide';
-import type { stackChannels } from './slide';
-import {
-  imageKey,
-  segmentsKey,
-  type ImageSettings,
-  type SegmentSettings,
-  type SlideSettings,
-} from './state';
-
-export interface LoadedSlide {
-  manifest: SlideManifest;
-  channels: ImageLayerSpec[];
-  loader: ReturnType<typeof stackChannels>;
-  pixelSize: number; // µm per full-res image pixel
-  segments: SegmentTileSource[];
-}
+import { colorValueRgb, rampLut, TAB20, UNASSIGNED_COLOR } from '../core/colormaps';
+import { tileWorldSize } from '../core/manifest';
+import type { SegmentSettings } from '../core/session';
+import type { Feature, FeatureTable } from '../io/features';
+import type { SegmentTileSource } from '../io/segments';
+import type { LoadedSlide } from '../io/slide';
 
 const OUTLINE_ALPHA = 220;
 
@@ -152,7 +126,7 @@ function colorizeTile(
   return key;
 }
 
-function segmentTileLayer(
+export function segmentTileLayer(
   slide: LoadedSlide,
   source: SegmentTileSource,
   settings: SegmentSettings,
@@ -241,78 +215,9 @@ function segmentTileLayer(
   });
 }
 
-function tooltip(info: PickingInfo) {
+/** Which cell is under the cursor — reads the picked sublayer's own data. */
+export function segmentTooltip(info: PickingInfo): string | null {
   const data = (info.sourceLayer?.props as { data?: DeckSegmentTile['fill'] })?.data;
   if (!data?.cellIds || info.index < 0) return null;
   return `cell ${data.cellIds[info.index]}`;
-}
-
-export function SlideViewer({
-  slide,
-  settings,
-  features,
-  initialView,
-}: {
-  slide: LoadedSlide;
-  settings: SlideSettings;
-  /** Per-cell attribute tables, keyed by segments layer key; null until
-   * that layer's features.parquet arrives. */
-  features: Record<string, FeatureTable | null>;
-  /** [x, y, zoom] in full-res pixel coords — the `?view=` URL param. */
-  initialView?: [number, number, number];
-}) {
-  const [, height, width] = slide.loader[0].shape;
-  const image = (id: string) => settings.layers[imageKey(id)] as ImageSettings;
-  const imagesOn = settings.sections.images?.checked ?? true;
-  const segmentsOn = settings.sections.segments?.checked ?? true;
-
-  const layers = [
-    new MultiscaleImageLayer({
-      id: 'image',
-      loader: slide.loader,
-      dtype: slide.loader[0].dtype,
-      selections: slide.channels.map((_, i) => ({ c: i })),
-      contrastLimits: slide.channels.map((c) => image(c.id).clim),
-      channelsVisible: slide.channels.map((c) => imagesOn && image(c.id).visible),
-      extensions: [new ColorPaletteExtension()],
-      // `colors` is the extension's prop, absent from the layer's own TS
-      // props — a spread slips past the excess-property check.
-      ...{
-        colors: slide.channels.map(
-          (c) => colorValueRgb(image(c.id).colormap),
-        ),
-      },
-    }),
-    ...slide.segments.map((source) => {
-      const key = segmentsKey(source.spec.id);
-      const layerSettings = settings.layers[key] as SegmentSettings;
-      return segmentTileLayer(
-        slide,
-        source,
-        { ...layerSettings, visible: segmentsOn && layerSettings.visible },
-        features[key] ?? null,
-      );
-    }),
-  ];
-
-  const fitZoom = Math.log2(
-    Math.min(window.innerWidth / width, window.innerHeight / height),
-  );
-  const [cx, cy, zoom] = initialView ?? [width / 2, height / 2, fitZoom];
-
-  return (
-    <DeckGL
-      views={new OrthographicView({ id: 'ortho' })}
-      controller={true}
-      initialViewState={{
-        target: [cx, cy, 0],
-        zoom,
-        minZoom: fitZoom - 1,
-        maxZoom: 6,
-      }}
-      layers={layers}
-      getTooltip={tooltip}
-      style={{ background: '#000' }}
-    />
-  );
 }

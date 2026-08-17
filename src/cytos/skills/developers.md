@@ -1,11 +1,11 @@
 # cytos developer guide
 
 AI-oriented onboarding for working on the cytos codebase. Vendor-neutral —
-symlink to it as `CLAUDE.md`, `.cursorrules`, `AGENTS.md`, or whatever your
-tool expects; human contributors can read it directly. It ships inside the
-package: `cytos-ctl skill developer` prints it. The guide for *operating*
-the viewer (driving it with `cytos-ctl`/MCP) is `users.md` next to this
-file — `cytos-ctl skill`.
+symlink it as `CLAUDE.md`, `.cursorrules`, `AGENTS.md`, or whatever your tool
+expects; humans can read it directly. It ships inside the
+package: `cytos-ctl skill developer` prints it. Two siblings: `users.md` for
+*operating* the viewer (`cytos-ctl skill`), and [`developers_qt.md`](developers_qt.md)
+for the Qt desktop viewer the web UI is replacing.
 
 ## What cytos is
 
@@ -13,8 +13,17 @@ A fast, read-only viewer for spatial biology data: cell segmentation polygons
 drawn over a large OME-Zarr morphology image. Dropping editability (unlike
 napari's Shapes layer) unlocks precomputation, immutable GPU buffers, and
 tiling — the same approach Xenium Explorer, deck.gl, and Mapbox use at this
-scale. Built on pygfx/wgpu directly, not a higher-level mapping library — see
-`work-notes/plan.md` for the design rationale and roadmap.
+scale. See `work-notes/plan.md` for the design rationale and roadmap.
+
+The UI is a web app (`web/`: React + deck.gl + viv) reading slides over
+plain HTTP. A Qt desktop viewer still exists and is still the reference for
+*behaviour* — when the two disagree about what a setting means, Qt is right —
+but it is being replaced, and `render/` + `ui/` retire with it, so new UI work
+goes in `web/` (see `developers_qt.md` before touching either). Python keeps
+the pipeline: `prep/` needs tifffile, imagecodecs, scikit-image, earcut and
+pyarrow, none of which belongs in a browser, and `core/` stays with it because
+it defines the format `prep/` writes. **The seam between the two languages is
+the `.cytos` format, not an API.**
 
 ## Project layout
 
@@ -38,9 +47,16 @@ skill` and the MCP `usage_guide` tool), and `docs/` (what cytos does to
 read each third-party data source, one `importing-<source>.md` per source —
 see below).
 
-`tools/make_synthetic_big_pyramid.py` and `tools/make_label_mask.py` stay
-outside the package, deliberately: dev-only generators, no end user needs
-them. Package vs. not is about what ships, not who runs it —
+`web/` is a separate vite + React + TypeScript app with its own
+`package.json` and `node_modules` (gitignored); nothing in `src/` imports it,
+and `pip install cytos` does not carry it. It carries the same one-directional
+rule, as directories: `core/` (model) ← `io/` (readers) ← `render/` (deck.gl
+layers) ← `ui/` (React). Check direction before adding an import.
+
+`tools/` stays outside the package, deliberately: `make_synthetic_big_pyramid.py`
+and `make_label_mask.py` are dev-only generators, `serve_slides.py` is the dev
+file server for the web viewer, and no end user needs any of them. Package
+vs. not is about what ships, not who runs it —
 `cytos-viewer`/`cytos-convert-ome-zarr` are the real product despite living in
 `src/`.
 
@@ -73,9 +89,9 @@ Cellpose, StarDist and friends produce). Both land as the same `Polygons`, and
 the file. Nothing about a polygon set assumes the objects are cells, or that
 they nest, or that one layer's objects relate to another's.
 
-## The `.cytos` slide — the viewer's only entry point
+## The `.cytos` slide — the one thing both viewers read
 
-`cytos-viewer` takes one slide directory and nothing else; `cytos-import`
+A viewer takes one slide directory and nothing else; `cytos-import`
 builds one. A slide is a plain directory with a plain-JSON manifest
 (`cytos.json`), not one big zarr hierarchy, so nothing at the top level is tied
 to a storage format — zarr stays in the leaves, each named by a per-layer
@@ -92,12 +108,21 @@ Each store in the leaves is **one zipped file** (`tiles.zarr.zip`) — a slide i
 written once and only ever read, and 6 files copy between machines in a way
 3,970 don't. Reads are as fast or faster. Directories still open; the `format`
 tag says which, and `cytos-import --no-zip` writes them. See
-`src/cytos/core/store.py`.
+`src/cytos/core/store.py`. Both readers take either form — the web one reads
+a zip over HTTP ranges (`web/src/io/zip.ts`), so no slide needs a second
+`--no-zip` copy. That works because the zip **compresses nothing**: every
+entry is STORED, since zarr already compressed each chunk, so an entry's
+bytes *are* the chunk and there is no inflate step. Opening costs two small
+reads (end-of-central-directory, then the directory); after that a chunk is
+one ranged GET, the same as a directory would cost. `ReadRange` in
+`web/src/io/read.ts` is the one place bytes enter the web app — an Electron
+local-file reader lands there and nowhere else.
 
 `cytos.json` holds each layer's *defaults*; `session.json` (same folder, written
 on window close) holds only your overrides plus camera and window state. Two
 files, so View > Reset to Slide Defaults can just drop the session and re-read
-the manifest. See `src/cytos/core/session.py`.
+the manifest. See `src/cytos/core/session.py`. The web viewer reads manifest
+defaults and does not write sessions yet.
 
 The importer writes the manifest, but it is no longer the only thing that does:
 `cytos.prep.segments.add_segments_to_slide` appends a segmentation layer to a
@@ -113,60 +138,74 @@ segmentation would otherwise import without complaint and draw as a smear along
 one side. `check_bounds_fit_slide` is what refuses that, and it runs before the
 expensive tracing step, not after it.
 
-## Remote control — the viewer is scriptable, including by AI
+## Running the web viewer
 
-The single-instance socket (how a second launch raises the first) doubles as
-a JSON command channel: `cytos-ctl` sends one JSON line, the app answers with
-one (`src/cytos/remote/ipc.py` is the wire, `_dispatch` in
-`src/cytos/ui/main_window.py` is the complete command list). Three rules keep
-it honest. Commands go **through the dock-panel widgets** — each
-`WindowController` method (`src/cytos/ui/controller.py`) calls the existing
-rows' `apply()`, whose signals reach the tile caches, so a remote command and
-a mouse click are one code path and the panel never lies. The vocabulary is
-the **saved-session vocabulary** — `state` returns what `collect_session`
-writes, `set` takes a partial dict of the same shape, so the session file
-format is the API and there is no second schema. And `describe` lists every
-legal value (layer keys, colormaps, features, genes), so a caller — human or
-AI — can always form a valid command instead of guessing; invalid values are
-rejected with the legal list, never silently ignored (Qt combo boxes ignore
-unknown `setCurrentText`, which is exactly the trap). `snapshot` renders
-**offscreen, never via the window**: `render_offscreen` in `build_window` runs
-the frame prep (tile loads are synchronous) and `renderer.render(...,
-flush=False)`, skipping only the blit-to-canvas. Relying on a widget repaint
-was tried first and returned stale frames — Qt won't paint a hidden or
-occluded window, and back-to-back socket commands leave no time for the
-render loop to catch up. Remote `open` takes a session name to skip the
-picker dialog (`build_window(session_name=)`); it enforces the same
-one-window-per-session rule the picker does.
+**Never make the human referee pixels** — the viewer screenshots itself, so
+look before reporting that something works. Two processes plus a browser:
 
-`cytos-mcp` (`src/cytos/remote/mcp_server.py`, optional extra `cytos[mcp]`) serves
-the same socket over MCP for AI clients with no shell; it is a pure adapter —
-every tool is one socket command, and its `snapshot` returns the PNG as MCP
-image content. It never starts the viewer.
+```
+python tools/serve_slides.py                   # serves data/ on :8787
+cd web && npm run dev                          # serves the page on :5173
+node shot.mjs 'http://localhost:5173/?slide=http://127.0.0.1:8787/<slide>.cytos' \
+     /tmp/web.png 7000
+```
+
+`serve_slides.py` adds CORS, single-`Range` support and HTTP/1.1 keep-alive
+with Nagle off — without the last two, a polygon tile's ~4 small requests cost
+~65 ms each instead of ~3 ms. `shot.mjs` screenshots the page and prints
+console errors, failed responses and `window.__tileStats`; pass `--headed`
+when judging *speed* (headless uses software GL, ~50x slower to tessellate).
+`smoke.mjs` checks the data path with no browser; `npm run build` runs
+`tsc --noEmit` first, so it is also the typecheck.
+`shot.mjs` catches the panel along with the scene — check UI changes with your
+own eyes. The native `<select>` popup is drawn by the OS at system font size
+and ignores page CSS, so `ui/controls.tsx` ships its own `Dropdown`: if a
+control's geometry isn't yours, you can't line it up.
+
+Not built yet: points/transcripts, session save/load, the minimap, and adding
+a channel or segmentation to an open slide.
+
+## The cross-language contract
+
+These live in both languages, each carrying a "same as X in Python" comment.
+Those comments *are* the contract and no CI enforces them — **change one
+side, change the other in the same commit.**
+
+| shared fact | Python | TypeScript |
+|---|---|---|
+| slide format version | `CYTOS_FORMAT`, `core/slide.py` | `core/manifest.ts` |
+| tile world size | `tile_world_size`, `core/tiling.py` | `core/manifest.ts` |
+| session vocabulary | `core/session.py` | `core/session.ts` |
+| channel hues, color presets | `render/image.py` | `core/colormaps.ts` |
+| non-measurement columns | `feature_names`, `core/polygons.py` | `io/features.ts` |
+| categorical marker | `core/polygons.py` | `io/features.ts` |
+| feature ramp domain (2nd/98th pct) | `render/polygons.py` | `io/features.ts` |
+| autocontrast (1st/99.5th pct) | `prep/slide.py` | `render/image.ts` |
+
+The session vocabulary is the load-bearing row: `core/session.ts` is written in
+the field names `collect_session` produces, so a future save/load — or a remote
+command — is a plain merge, not a translation.
+
+## Scriptable, including by AI
+
+The Qt viewer is driven over a JSON socket (`developers_qt.md`). The
+transport won't survive the move to web; three rules should, and are worth
+re-reading before designing a replacement: remote command and mouse click go
+through **one code path**, so the panel can never lie; the **session file
+format is the API**; `describe` **lists every legal value**.
 
 The onboarding guide for AI assistants ships *inside the package*
-(`src/cytos/skills/users.md`, printed by `cytos-ctl skill`, served by the
-MCP `usage_guide` tool — CLI-only, because cytos is an app, not a library).
-The README deliberately does not explain the
-command surface; the guide does. When a command, field, or convention
-changes, update the guide in the same change — it is the interface contract
-an AI reads, and a stale one teaches wrong commands.
-
-## Developing the panel
-
-`cytos-ctl snapshot --panel` (MCP: `snapshot` with `panel=true`) captures
-the dock via `QWidget.grab` — check UI changes with your own eyes; never
-make the human referee pixels. Offscreen widget tests verify logic, not
-looks. Keep the Fusion style (`_ensure_app`): native styles draw hidden
-padding their reported metrics don't match, differently per OS. Compose
-pixel-exact rows from plain widgets (the legend in `segment_panel.py`) —
-composite widgets like QTreeWidget bury their checkbox geometry.
+(`src/cytos/skills/users.md`, printed by `cytos-ctl skill`; the README
+deliberately does not explain the command surface). When a command, field or
+convention changes, update it in the same change — it is the interface
+contract an AI reads, and a stale one teaches wrong commands.
 
 ## Implementation gotchas (verified against a real slide)
 
-Nothing here is about any one vendor's format — those facts live in
+Nothing here is about any one vendor's format — those live in
 `src/cytos/docs/`, per vendor. These are code-level pitfalls hit while
-building the tool, stated so the guards in the code don't look removable.
+building the tool, stated so the guards in the code don't look removable; the
+pygfx/Qt ones are in `developers_qt.md`.
 
 - **`ome_zarr.writer.write_image` cannot write a label mask.** It ignores the
   `coordinate_transformations` passed to it (writing unit scale and zero
@@ -216,35 +255,23 @@ building the tool, stated so the guards in the code don't look removable.
   plain scale-and-offset (`PyramidLevel.row_to_world_y`), and polygon/point
   loaders read `vertex_y`/`y_location` straight through. World bounds are
   positive, and **tile row 0 is the top row** (`src/cytos/core/tiling.py`).
-  pygfx renders +y upward, so exactly one flip is still needed and it lives on
-  the camera — `camera.local.scale_y = -1` in `src/cytos/ui/main_window.py`.
-  Put display conventions in the view, not in the data. Two things make that
-  flip safe, and both were checked: `camera.width`/`height` stay positive (so
-  the note below still applies unchanged), and `PanZoomController` derives its
-  pan basis by unprojecting through the camera, so drag directions follow the
-  mirror with no change to the controller.
-- **`camera.width`/`camera.height` don't reflect what's actually visible on
-  screen** when the viewport aspect differs from the camera's —
-  `OrthographicCamera(maintain_aspect=True)` pads internally without updating
-  those properties. Any world-space view rect derived from them directly is
-  too narrow. Use `src/cytos/render/camera.py:effective_camera_view_size()`
-  instead, everywhere a camera-driven view is needed.
-- **A switched-off polygon fill still renders, at opacity 0.** The fill mesh
-  doubles as the pick surface (`PolygonTileCache.pick_cell`); `visible=False`
-  would make cell interiors un-hoverable whenever only outlines show. pygfx
-  picks fully transparent meshes (verified). Related trap: an *opaque*
-  object drawn above a transparent one depth-culls it out of the pick
-  buffer — every layer above the polygon fill must keep
-  `alpha_mode="blend"` (no depth write) or picking under it dies.
-- **Sequential colormaps (matplotlib's `Blues`/`Greens`/`Reds`, vendored via
-  `plotlet`) anchor at near-white, not black.** Additive-blended composite
-  display (see the earlier fluorescence/autocontrast note) wants pixel value
-  0 to render as black background; a white-anchored colormap washes the
-  whole composite to gray instead. `src/cytos/render/image.py` registers its
-  own black->hue set (`blue`, `green`, `red`, `cyan`, `magenta`, `yellow`) via
-  `plotlet.register_colormap` at import time for this reason — don't default
-  composite channels to a matplotlib sequential colormap without checking its
-  0-end color first.
+  Put display conventions in the view, not in the data — deck's
+  `OrthographicView` already points y down, so the web viewer needs no flip
+  at all; the Qt one carries a single flip on its camera (`developers_qt.md`).
+- **A polygon fill switched off still renders, at opacity 0** in both
+  renderers — it doubles as the pick surface, so hiding it would make cell
+  interiors un-hoverable whenever only outlines show.
+- **deck.gl regenerates tiles on data identity, not closure identity.** Build
+  each tile's binary arrays in `getTileData`, never in `renderSubLayers` — the
+  latter runs on every update for every visible tile, so fresh objects there
+  make deck re-tessellate every loaded tile whenever a new one arrives
+  (quadratic, and it showed). Conversely a new closure alone changes nothing,
+  so any setting that alters a tile's appearance must be in `updateTriggers`.
+  Our tile grid *is* deck's: `minZoom`/`maxZoom` at 0 with `tileSize` = one
+  tile's world size makes deck's `(x, y)` exactly our `(col, row)`.
+- **viv takes one flat RGB per channel** (`ColorPaletteExtension`), so a ramp
+  colormap on a web image channel silently renders as its top color; offering
+  ramps there needs a LUT in the shader.
 - **A single-channel OME-TIFF may have no channel axis at all.** Some
   pipelines write `SizeC=1` as a plain 2D plane (`axes="YX"`) where their
   multi-channel output is `axes="CYX"` (which versions do which:
@@ -265,26 +292,16 @@ building the tool, stated so the guards in the code don't look removable.
   real dependency. Discovery must know old and new layouts both: a glob for
   only the old per-channel names finds nothing in a new bundle and imports
   an image-less slide without complaint.
-- **A PySide6 QAction wrapper must stay referenced while you use what it
-  returned.** `bar.actions()[0].menu()` dies with `Internal C++ object
-  (QMenu) already deleted`: the QAction wrapper is a temporary, Python
-  collects it as soon as `.menu()` returns, and shiboken invalidates the
-  menu it handed out along with it. Hold the action in a variable for as
-  long as the menu is in use (`act = bar.actions()[0]; menu = act.menu()`).
-  Nothing in the app walks menus this way — this bites in *tests and
-  probes* that inspect a built menu, where it looks exactly like a
-  wrapper-lifetime bug in the menu-building code. It isn't; the same
-  failure reproduces on any hand-built QMenuBar.
 
 ## Errors and warnings
 
 Take every error and warning seriously, even harmless-looking ones — fix the
-cause, or say why it stays. Console noise trains you to stop reading it. wgpu/Qt
-teardown messages look like somebody else's problem and usually aren't (see
-`_shutdown_gpu` in `src/cytos/ui/main_window.py`).
+cause, or say why it stays. Console noise trains you to stop reading it.
+`shot.mjs` prints console errors, page errors and every response over 400 for
+exactly this reason — a 404 on a tile chunk is a finding, not noise.
 
 ## Environment
 
 Python setup (conda envs, interpreter paths) is in the gitignored
-`CLAUDE.local.md`, not here — it's machine-specific, not general project
-knowledge.
+`CLAUDE.local.md` — machine-specific, not project knowledge. `web/` needs
+Node and a plain `npm install`.
