@@ -57,6 +57,7 @@ export function SlideViewer({
   return (
     <DeckGL
       views={new OrthographicView({ id: 'ortho' })}
+      deviceProps={{ webgl: { antialias: false } }}
       controller={true}
       initialViewState={{
         target: [cx, cy, 0],

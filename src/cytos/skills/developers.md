@@ -288,6 +288,19 @@ pygfx/Qt ones are in `developers_qt.md`.
   so any setting that alters a tile's appearance must be in `updateTriggers`.
   Our tile grid *is* deck's: `minZoom`/`maxZoom` at 0 with `tileSize` = one
   tile's world size makes deck's `(x, y)` exactly our `(col, row)`.
+- **deck's default canvas multisamples (4x MSAA), and outlines pay its whole
+  cost.** Cell outlines are millions of thin quads, so nearly every pixel they
+  touch is a triangle edge — exactly what multisampling multiplies — while the
+  fill's big interior triangles barely notice it. Measured on the pancreas
+  slide at overview zoom (headed Chromium, retina): dragging ran at 7.6 fps
+  with outlines on and 60 with fill only, with the JS thread idle — pure GPU
+  raster cost. Two fixes, both needed: `scene.tsx` turns the context's
+  `antialias` off (pygfx never multisamples either — its line shader feathers
+  its own edges), and `render/segments.ts` draws outlines with `LineLayer` as
+  independent (source, target) segments — the same interleaving as the Qt
+  renderer's `_make_outline` — because `PathLayer`'s miter-joined quads cost
+  about twice as much (6 vertices and 4 projected positions per segment
+  against 4 and 2). Together: 7.6 → 60 fps.
 - **viv takes one flat RGB per channel** (`ColorPaletteExtension`), so a ramp
   colormap on a web image channel silently renders as its top color; offering
   ramps there needs a LUT in the shader.

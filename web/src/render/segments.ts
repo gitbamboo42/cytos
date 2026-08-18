@@ -2,12 +2,12 @@
  * Polygon layers: one deck TileLayer per segment layer, each tile drawn as
  * two sublayers from the same binary arrays — a SolidPolygonLayer fill that
  * doubles as the pick surface (kept even at opacity 0, same trick as the Qt
- * renderer, where hiding the fill would kill hover picking), and a PathLayer
- * with `_pathType: 'loop'` for the ring outlines.
+ * renderer, where hiding the fill would kill hover picking), and a LineLayer
+ * drawing each ring edge as an independent segment (see ringSegments).
  */
 
 import { TileLayer } from '@deck.gl/geo-layers';
-import { PathLayer, SolidPolygonLayer } from '@deck.gl/layers';
+import { LineLayer, SolidPolygonLayer } from '@deck.gl/layers';
 import type { PickingInfo } from '@deck.gl/core';
 import { Matrix4 } from '@math.gl/core';
 
@@ -36,19 +36,45 @@ interface DeckSegmentTile {
     startIndices: Uint32Array;
     attributes: {
       getPolygon: { value: Float32Array; size: number };
-      getFillColor?: { value: Uint8Array; size: number };
+      getFillColor?: { value: Uint8Array; size: number; normalized: boolean };
     };
     cellIds: Uint32Array;
     vertexCellIds: Uint32Array;
   };
-  path: {
+  outline: {
     length: number;
-    startIndices: Uint32Array;
     attributes: {
-      getPath: { value: Float32Array; size: number };
-      getColor?: { value: Uint8Array; size: number };
+      getSourcePosition: { value: Float32Array; size: number };
+      getTargetPosition: { value: Float32Array; size: number };
+      getColor?: { value: Uint8Array; size: number; normalized: boolean };
     };
+    segmentCellIds: Uint32Array;
   };
+}
+
+/** Ring edges as independent (source, target) segment pairs — the same
+ * interleaving Qt's `_make_outline` does for `LineSegmentMaterial`, and for
+ * the same reason: a plain segment is far cheaper on the GPU than PathLayer's
+ * miter-joined quads (4 projected positions and 6 vertices per segment, which
+ * measured at ~8 fps against LineLayer during a drag over a full slide). The
+ * rings arrive closed (first vertex repeated), so consecutive vertices within
+ * a ring are exactly the segments and no cross-ring edge is ever emitted. */
+function ringSegments(positions: Float32Array, startIndices: Uint32Array, cellIds: Uint32Array) {
+  const nRings = startIndices.length - 1;
+  const nSegments = startIndices[nRings] - nRings;
+  const source = new Float32Array(nSegments * 2);
+  const target = new Float32Array(nSegments * 2);
+  const segmentCellIds = new Uint32Array(nSegments);
+  let out = 0;
+  for (let ring = 0; ring < nRings; ring++) {
+    const from = startIndices[ring];
+    const to = startIndices[ring + 1];
+    source.set(positions.subarray(from * 2, (to - 1) * 2), out * 2);
+    target.set(positions.subarray((from + 1) * 2, to * 2), out * 2);
+    segmentCellIds.fill(cellIds[ring], out, out + (to - 1 - from));
+    out += to - 1 - from;
+  }
+  return { source, target, segmentCellIds };
 }
 
 /** Per-vertex RGBA from a per-cell feature: the tile's vertex_cell_id
@@ -118,14 +144,19 @@ function colorizeTile(
     // itself, a ramp's top otherwise — the `flat_colors` rule from
     // src/cytos/render/polygons.py, so flat color needs no second field.
     const flat = colorValueRgb(colormap);
+    const segIds = tile.outline.segmentCellIds;
     const fill = feature
       ? vertexColors(ids, feature, colormap, fillAlpha)
       : solidColors(ids.length, flat, fillAlpha);
+    // LineLayer colors are per segment (per instance), not per vertex.
     const line = feature
-      ? vertexColors(ids, feature, colormap, OUTLINE_ALPHA)
-      : solidColors(ids.length, flat, OUTLINE_ALPHA);
-    tile.fill.attributes.getFillColor = { value: fill, size: 4 };
-    tile.path.attributes.getColor = { value: line, size: 4 };
+      ? vertexColors(segIds, feature, colormap, OUTLINE_ALPHA)
+      : solidColors(segIds.length, flat, OUTLINE_ALPHA);
+    // `normalized: true` says these uint8 channels are 0-255 fractions of 1,
+    // matching the shader attribute's unorm8 type — without the flag deck
+    // assumes it and warns on every tile.
+    tile.fill.attributes.getFillColor = { value: fill, size: 4, normalized: true };
+    tile.outline.attributes.getColor = { value: line, size: 4, normalized: true };
     colorState.set(tile, key);
   }
   return key;
@@ -174,6 +205,7 @@ export function segmentTileLayer(
     getTileData: async ({ index: { x, y } }) => {
       const tile = await source.tile(y, x);
       if (!tile) return null;
+      const segments = ringSegments(tile.positions, tile.startIndices, tile.cellIds);
       return {
         fill: {
           length: tile.length,
@@ -182,10 +214,13 @@ export function segmentTileLayer(
           cellIds: tile.cellIds, // for the tooltip, via sourceLayer.props.data
           vertexCellIds: tile.vertexCellIds,
         },
-        path: {
-          length: tile.length,
-          startIndices: tile.startIndices,
-          attributes: { getPath: { value: tile.positions, size: 2 } },
+        outline: {
+          length: segments.segmentCellIds.length,
+          attributes: {
+            getSourcePosition: { value: segments.source, size: 2 },
+            getTargetPosition: { value: segments.target, size: 2 },
+          },
+          segmentCellIds: segments.segmentCellIds,
         },
       };
     },
@@ -205,15 +240,9 @@ export function segmentTileLayer(
           updateTriggers: { getFillColor: colorKey },
         }),
         settings.show_outline &&
-          new PathLayer({
+          new LineLayer({
             id: `${props.id}-outline`,
-            data: tile.path,
-            // 'open', not 'loop': the reader already repeated each ring's
-            // first vertex, because deck ignores 'loop' for binary input
-            // (see the note in io/segments.ts). Any non-null value is what
-            // turns deck's own path normalization off, which is the point.
-            _pathType: 'open',
-            positionFormat: 'XY',
+            data: tile.outline,
             getWidth: OUTLINE_WIDTH,
             widthUnits: 'pixels',
             modelMatrix: worldToPixels,
