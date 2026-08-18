@@ -9,14 +9,28 @@
  * viewer there is exactly one place display orientation lives: the view.
  */
 
+import { useState } from 'react';
 import { OrthographicView } from '@deck.gl/core';
 import DeckGL from '@deck.gl/react';
 
-import { segmentsKey, type SegmentSettings, type SlideSettings } from '../core/session';
+import {
+  pointsKey,
+  segmentsKey,
+  type PointSettings,
+  type SegmentSettings,
+  type SlideSettings,
+} from '../core/session';
 import type { FeatureTable } from '../io/features';
 import type { LoadedSlide } from '../io/slide';
 import { imageLayer } from './image';
+import { pointTileLayer, selectPointLevel } from './points';
 import { segmentTileLayer, segmentTooltip } from './segments';
+
+/** World µm covered by one screen pixel. View space is full-resolution image
+ * pixels, so a screen pixel spans 2^-zoom of them, each `pixelSize` µm wide. */
+function worldPerPixel(pixelSize: number, zoom: number): number {
+  return pixelSize * Math.pow(2, -zoom);
+}
 
 export function SlideViewer({
   slide,
@@ -34,6 +48,23 @@ export function SlideViewer({
 }) {
   const [, height, width] = slide.loader[0].shape;
   const segmentsOn = settings.sections.segments?.checked ?? true;
+  const pointsOn = settings.sections.points?.checked ?? true;
+
+  const fitZoom = Math.log2(
+    Math.min(window.innerWidth / width, window.innerHeight / height),
+  );
+  const [cx, cy, zoom] = initialView ?? [width / 2, height / 2, fitZoom];
+  const pointLevels = Math.max(...slide.points.map((p) => p.levels), 1);
+
+  // Which point detail level the current zoom deserves. State, not a
+  // per-frame read: it changes only when a zoom crosses a level boundary,
+  // and re-rendering React on every drag frame would spend the frame budget
+  // the renderer just bought. Seeded from the opening zoom — starting at
+  // full detail would draw every one of millions of transcripts over the
+  // whole slide before the first mouse move.
+  const [pointLevel, setPointLevel] = useState(() =>
+    selectPointLevel(pointLevels, worldPerPixel(slide.pixelSize, zoom)),
+  );
 
   const layers = [
     imageLayer(slide, settings),
@@ -47,12 +78,20 @@ export function SlideViewer({
         features[key] ?? null,
       );
     }),
+    ...slide.points.flatMap((source) => {
+      const key = pointsKey(source.spec.id);
+      const layerSettings = settings.layers[key] as PointSettings;
+      if (!layerSettings) return [];
+      return [
+        pointTileLayer(
+          slide,
+          source,
+          { ...layerSettings, visible: pointsOn && layerSettings.visible },
+          Math.min(pointLevel, source.levels - 1),
+        ),
+      ];
+    }),
   ];
-
-  const fitZoom = Math.log2(
-    Math.min(window.innerWidth / width, window.innerHeight / height),
-  );
-  const [cx, cy, zoom] = initialView ?? [width / 2, height / 2, fitZoom];
 
   return (
     <DeckGL
@@ -66,6 +105,13 @@ export function SlideViewer({
         maxZoom: 6,
       }}
       layers={layers}
+      onViewStateChange={({ viewState }) => {
+        const next = selectPointLevel(
+          pointLevels,
+          worldPerPixel(slide.pixelSize, (viewState as { zoom: number }).zoom),
+        );
+        if (next !== pointLevel) setPointLevel(next);
+      }}
       getTooltip={segmentTooltip}
       style={{ background: '#000' }}
     />

@@ -52,6 +52,32 @@ const RAMPS: Record<string, RGB[]> = {
  * extension (see the note in render/image.ts). */
 export const RAMP_NAMES = ['gray', 'viridis', 'magma', 'plasma', 'inferno', 'cividis'];
 
+/** matplotlib tab10 — the default qualitative palette for colour-per-gene,
+ * same as `DEFAULT_PALETTE` in `src/cytos/render/points.py`. Ten distinct
+ * hues; tab20 pairs light and dark of each, which is harder to tell apart
+ * at one-pixel dot sizes. */
+export const TAB10: RGB[] = [
+  [31, 119, 180],
+  [255, 127, 14],
+  [44, 160, 44],
+  [214, 39, 40],
+  [148, 103, 189],
+  [140, 86, 75],
+  [227, 119, 194],
+  [127, 127, 127],
+  [188, 189, 34],
+  [23, 190, 207],
+];
+
+/** A gene's colour before anyone pins one: fixed by dense gene id, so it
+ * never moves when the selection changes. The picker and the renderer both
+ * call this, which is what keeps the circle in the list and the dot on the
+ * slide the same colour. */
+export function presetGeneColor(geneId: number): string {
+  const [r, g, b] = TAB10[geneId % TAB10.length];
+  return `#${[r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+}
+
 /** matplotlib tab20, in its interleaved dark/light order. */
 export const TAB20: RGB[] = [
   [31, 119, 180], [174, 199, 232], [255, 127, 14], [255, 187, 120],

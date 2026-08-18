@@ -35,6 +35,31 @@ export interface SegmentLayerSpec {
   colormap?: string;
 }
 
+export interface PointLayerSpec {
+  kind: 'points';
+  id: string;
+  path: string;
+  format: string;
+  tile_depth: number;
+  tiles: [number, number][];
+  n_points: number;
+  /** Detail levels in the cache: level k lives at grid depth
+   * `tile_depth - k`, level 0 is every real point. 1 means full detail only
+   * (a slide written before levels existed). */
+  levels?: number;
+  /** Qualitative palette name for colour-per-gene. */
+  palette?: string;
+  /** Flat colour, used when `color_mode` is not "gene". */
+  colormap?: string;
+  color_mode?: string;
+  /** Dense gene ids the slide opens with; absent means every gene. */
+  genes?: number[] | null;
+  gene_colors?: Record<number, string>;
+  size?: number;
+  opacity?: number;
+  visible?: boolean;
+}
+
 export interface SlideManifest {
   cytos_format: number;
   name: string;
@@ -42,7 +67,10 @@ export interface SlideManifest {
   world_bounds: [number, number, number, number];
   tile_depth: number;
   layers: Array<
-    ImageLayerSpec | SegmentLayerSpec | { kind: string; id: string; path: string }
+    | ImageLayerSpec
+    | SegmentLayerSpec
+    | PointLayerSpec
+    | { kind: string; id: string; path: string }
   >;
 }
 
@@ -56,6 +84,10 @@ export function imageLayers(manifest: SlideManifest): ImageLayerSpec[] {
 
 export function segmentLayers(manifest: SlideManifest): SegmentLayerSpec[] {
   return manifest.layers.filter((l): l is SegmentLayerSpec => l.kind === 'segments');
+}
+
+export function pointLayers(manifest: SlideManifest): PointLayerSpec[] {
+  return manifest.layers.filter((l): l is PointLayerSpec => l.kind === 'points');
 }
 
 /** Side length of one vector tile in world units — same formula as

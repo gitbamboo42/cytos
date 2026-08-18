@@ -18,7 +18,8 @@
  * the popup.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 import { COLOR_PRESETS, colorValueHex, hexToHsv, hsvToHex } from '../core/colormaps';
 
@@ -132,12 +133,17 @@ export function ColorSwatch({
   onChange,
   title,
   custom,
+  round,
 }: {
   /** Any colormap value; displayed as the color it stands for. */
   value: string;
   onChange: (value: string) => void;
   title?: string;
   custom: CustomColors;
+  /** Draw the button as a circle — what a gene's preset colour looks like
+   * in the gene list, where a dot reads as "this is a point" rather than
+   * "this is a layer". */
+  round?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [hover, setHover] = useState<string | null>(null);
@@ -145,11 +151,40 @@ export function ColorSwatch({
   const [hsv, setHsv] = useState<[number, number, number]>([0, 1, 1]);
   const [hex, setHex] = useState('#ffffff');
   const ref = useRef<HTMLDivElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
+  // Where the popup sits, in viewport coordinates. It is rendered into
+  // <body> rather than beside the swatch because a swatch can live inside a
+  // scrolling list (the gene picker), and an absolutely positioned child of
+  // a scroll container is clipped by it — the popup would open below the
+  // fold and have to be scrolled into view.
+  const [at, setAt] = useState<{ left: number; top?: number; bottom?: number }>({ left: 0 });
+
+  useLayoutEffect(() => {
+    if (!open || !ref.current) return;
+    const place = () => {
+      const r = ref.current!.getBoundingClientRect();
+      const height = pop.current?.offsetHeight ?? 240;
+      const below = window.innerHeight - r.bottom;
+      const left = Math.max(4, Math.min(r.left, window.innerWidth - (pop.current?.offsetWidth ?? 220) - 4));
+      // Flip above the swatch when there is not room under it.
+      setAt(
+        below >= height + 8 || below >= r.top
+          ? { left, top: r.bottom + 2 }
+          : { left, bottom: window.innerHeight - r.top + 2 },
+      );
+    };
+    place();
+    window.addEventListener('resize', place);
+    return () => window.removeEventListener('resize', place);
+  }, [open, picker]);
 
   useEffect(() => {
     if (!open) return;
     const close = (e: PointerEvent) => {
-      if (!ref.current?.contains(e.target as Node)) {
+      const target = e.target as Node;
+      // The popup is a portal, so it is not inside `ref` — check it too, or
+      // every click on a swatch inside the popup would dismiss it.
+      if (!ref.current?.contains(target) && !pop.current?.contains(target)) {
         setOpen(false);
         setPicker(false);
       }
@@ -203,80 +238,89 @@ export function ColorSwatch({
       <button
         type="button"
         className="swatch"
-        style={{ background: colorValueHex(value) }}
+        style={{
+          background: colorValueHex(value),
+          ...(round ? { borderRadius: '50%', width: 10, height: 10 } : null),
+        }}
         title={title ?? colorValueHex(value)}
         onClick={() => setOpen(!open)}
       />
-      {open && (
-        <div className="cp-pop">
-          {sections.map(([label, entries]) => (
-            <div key={label}>
-              <Section title={label} />
-              <Grid>
-                {entries.map(([name, v]) => (
-                  <Swatch
-                    key={`${label}-${v}`}
-                    value={v}
-                    name={name}
-                    selected={v === value}
-                    onPick={() => onChange(v)}
-                    onHover={setHover}
-                  />
-                ))}
-              </Grid>
-            </div>
-          ))}
-          <div className="cp-buttons">
-            <button
-              type="button"
-              className="cp-swatch cp-text"
-              disabled={!custom.colors.includes(value)}
-              onClick={() => custom.remove(value)}
-              onPointerEnter={() => setHover('Delete color')}
-              onPointerLeave={() => setHover(null)}
-            >
-              −
-            </button>
-            <button
-              type="button"
-              className="cp-swatch cp-text"
-              onClick={togglePicker}
-              onPointerEnter={() => setHover('New color…')}
-              onPointerLeave={() => setHover(null)}
-            >
-              +
-            </button>
-          </div>
-          {picker && (
-            <div className="cp-picker">
-              <ShadeSquare
-                hue={hsv[0]}
-                s={hsv[1]}
-                v={hsv[2]}
-                onChange={(s, v) => setFromHsv(hsv[0], s, v)}
-              />
-              <HueStrip hue={hsv[0]} onChange={(h) => setFromHsv(h, hsv[1], hsv[2])} />
-              <div className="cp-hex-row">
-                <input
-                  className="cp-hex"
-                  value={hex}
-                  spellCheck={false}
-                  onChange={(e) => {
-                    setHex(e.target.value);
-                    if (/^#[0-9a-f]{6}$/i.test(e.target.value.trim())) {
-                      setHsv(hexToHsv(e.target.value.trim()));
-                    }
-                  }}
-                />
-                <button type="button" className="cp-add" onClick={addPicked}>
-                  Add
-                </button>
+      {open &&
+        createPortal(
+          <div
+            className="cp-pop"
+            ref={pop}
+            style={{ position: 'fixed', left: at.left, top: at.top, bottom: at.bottom }}
+          >
+            {sections.map(([label, entries]) => (
+              <div key={label}>
+                <Section title={label} />
+                <Grid>
+                  {entries.map(([name, v]) => (
+                    <Swatch
+                      key={`${label}-${v}`}
+                      value={v}
+                      name={name}
+                      selected={v === value}
+                      onPick={() => onChange(v)}
+                      onHover={setHover}
+                    />
+                  ))}
+                </Grid>
               </div>
+            ))}
+            <div className="cp-buttons">
+              <button
+                type="button"
+                className="cp-swatch cp-text"
+                disabled={!custom.colors.includes(value)}
+                onClick={() => custom.remove(value)}
+                onPointerEnter={() => setHover('Delete color')}
+                onPointerLeave={() => setHover(null)}
+              >
+                −
+              </button>
+              <button
+                type="button"
+                className="cp-swatch cp-text"
+                onClick={togglePicker}
+                onPointerEnter={() => setHover('New color…')}
+                onPointerLeave={() => setHover(null)}
+              >
+                +
+              </button>
             </div>
-          )}
-          <div className="cp-hover">{hover ?? ' '}</div>
-        </div>
-      )}
+            {picker && (
+              <div className="cp-picker">
+                <ShadeSquare
+                  hue={hsv[0]}
+                  s={hsv[1]}
+                  v={hsv[2]}
+                  onChange={(s, v) => setFromHsv(hsv[0], s, v)}
+                />
+                <HueStrip hue={hsv[0]} onChange={(h) => setFromHsv(h, hsv[1], hsv[2])} />
+                <div className="cp-hex-row">
+                  <input
+                    className="cp-hex"
+                    value={hex}
+                    spellCheck={false}
+                    onChange={(e) => {
+                      setHex(e.target.value);
+                      if (/^#[0-9a-f]{6}$/i.test(e.target.value.trim())) {
+                        setHsv(hexToHsv(e.target.value.trim()));
+                      }
+                    }}
+                  />
+                  <button type="button" className="cp-add" onClick={addPicked}>
+                    Add
+                  </button>
+                </div>
+              </div>
+            )}
+            <div className="cp-hover">{hover ?? ' '}</div>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

@@ -16,8 +16,9 @@
 
 import { useEffect, useRef, useState } from 'react';
 
-import { defaultSettings, segmentsKey, type SlideSettings } from './core/session';
+import { defaultSettings, pointsKey, segmentsKey, type SlideSettings } from './core/session';
 import { loadFeatures, type FeatureTable } from './io/features';
+import { loadGenes, type GeneTable } from './io/points';
 import { desktopHost } from './io/host';
 import { readerFor } from './io/read';
 import { loadSlide, type LoadedSlide } from './io/slide';
@@ -45,6 +46,7 @@ export default function App() {
   const [slide, setSlide] = useState<LoadedSlide | null>(null);
   const [settings, setSettings] = useState<SlideSettings | null>(null);
   const [features, setFeatures] = useState<Record<string, FeatureTable | null>>({});
+  const [genes, setGenes] = useState<Record<string, GeneTable | null>>({});
   const [error, setError] = useState<string | null>(null);
   // One pool of user-created colors for the whole window, shared by every
   // picker — a color mixed while tuning one layer is a one-click swatch on
@@ -81,6 +83,7 @@ export default function App() {
     setSlide(null);
     setSettings(null);
     setFeatures({});
+    setGenes({});
     setError(null);
     loadSlide(readerFor(slideUrl))
       .then((loaded) => {
@@ -109,6 +112,25 @@ export default function App() {
           if (!cancelled) setFeatures((prev) => ({ ...prev, [key]: table }));
         })
         .catch((err) => console.error(`features for ${key}:`, err));
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [slide, slideUrl]);
+
+  // Gene tables, one per point layer — names and whole-slide counts, so the
+  // gene picker can list and rank without reading a single transcript.
+  useEffect(() => {
+    if (!slide || !slideUrl) return;
+    let cancelled = false;
+    const read = readerFor(slideUrl);
+    for (const source of slide.points) {
+      const key = pointsKey(source.spec.id);
+      loadGenes(read, source.spec.path)
+        .then((table) => {
+          if (!cancelled) setGenes((prev) => ({ ...prev, [key]: table }));
+        })
+        .catch((err) => console.error(`genes for ${key}:`, err));
     }
     return () => {
       cancelled = true;
@@ -160,6 +182,7 @@ export default function App() {
         slide={slide}
         settings={settings}
         features={features}
+        genes={genes}
         custom={custom}
         onChange={(key, patch) =>
           setSettings((prev) =>

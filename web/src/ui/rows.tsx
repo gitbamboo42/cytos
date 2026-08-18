@@ -7,12 +7,14 @@
 import { useState } from 'react';
 
 import { RAMP_NAMES } from '../core/colormaps';
-import type { ImageLayerSpec, SegmentLayerSpec } from '../core/manifest';
-import type { ImageSettings, SegmentSettings } from '../core/session';
+import type { ImageLayerSpec, PointLayerSpec, SegmentLayerSpec } from '../core/manifest';
+import type { ImageSettings, PointSettings, SegmentSettings } from '../core/session';
 import type { FeatureTable } from '../io/features';
+import type { GeneTable } from '../io/points';
 import type { LoadedSlide } from '../io/slide';
 import { autocontrast } from '../render/image';
 import { ColorSwatch, type CustomColors } from './color-picker';
+import { GenePicker } from './gene-picker';
 import { ClimControl, Dropdown, styles } from './controls';
 
 export function ImageRow({
@@ -154,6 +156,94 @@ export function SegmentRow({
           />
         )}
       </div>
+    </div>
+  );
+}
+
+/** One point layer: how big the dots are, how solid, and whether they take a
+ * colour per gene or one flat colour — plus the gene picker below, which
+ * decides the genes drawn and pins per-gene colours. */
+export function PointRow({
+  layer,
+  settings,
+  genes,
+  custom,
+  onChange,
+}: {
+  layer: PointLayerSpec;
+  settings: PointSettings;
+  genes: GeneTable | null;
+  custom: CustomColors;
+  onChange: (patch: Partial<PointSettings>) => void;
+}) {
+  return (
+    <div style={styles.row}>
+      <div style={styles.head}>
+        <input
+          type="checkbox"
+          checked={settings.visible}
+          onChange={(e) => onChange({ visible: e.target.checked })}
+        />
+        <span style={styles.name}>
+          {layer.id}{' '}
+          <span style={{ color: '#777' }}>({layer.n_points.toLocaleString()})</span>
+        </span>
+      </div>
+      <div style={styles.line}>
+        <span style={styles.label}>size</span>
+        <input
+          type="range"
+          style={{ flex: 1, minWidth: 0 }}
+          min={1}
+          max={10}
+          step={0.5}
+          value={settings.size}
+          onChange={(e) => onChange({ size: Number(e.target.value) })}
+        />
+        <span style={styles.num}>{settings.size.toFixed(1)}</span>
+      </div>
+      <div style={styles.line}>
+        <span style={styles.label}>opacity</span>
+        <input
+          type="range"
+          style={{ flex: 1, minWidth: 0 }}
+          min={0.05}
+          max={1}
+          step={0.05}
+          value={settings.opacity}
+          onChange={(e) => onChange({ opacity: Number(e.target.value) })}
+        />
+        <span style={styles.num}>{settings.opacity.toFixed(2)}</span>
+      </div>
+      <div style={styles.line}>
+        <span style={styles.label}>color</span>
+        <Dropdown
+          grow
+          value={settings.color_mode}
+          options={['gene', 'flat']}
+          labels={{ gene: 'By gene', flat: 'Flat color' }}
+          onChange={(color_mode) => onChange({ color_mode })}
+        />
+        {settings.color_mode !== 'gene' && (
+          <ColorSwatch
+            value={settings.colormap}
+            title="flat point color"
+            custom={custom}
+            onChange={(colormap) => onChange({ colormap })}
+          />
+        )}
+      </div>
+      {genes && (
+        <GenePicker
+          genes={genes}
+          selected={settings.genes}
+          byGene={settings.color_mode === 'gene'}
+          colors={settings.gene_colors ?? {}}
+          custom={custom}
+          onChange={(next) => onChange({ genes: next })}
+          onColorChange={(gene_colors) => onChange({ gene_colors })}
+        />
+      )}
     </div>
   );
 }

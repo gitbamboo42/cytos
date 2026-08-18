@@ -9,12 +9,14 @@
 import {
   CYTOS_FORMAT,
   imageLayers,
+  pointLayers,
   segmentLayers,
   type ImageLayerSpec,
   type SlideManifest,
 } from '../core/manifest';
 import { openImagePyramid, stackChannels, type ChannelStackSource } from './image';
 import type { ReadRange } from './read';
+import { PointTileSource } from './points';
 import { SegmentTileSource } from './segments';
 
 export interface LoadedSlide {
@@ -26,6 +28,7 @@ export interface LoadedSlide {
    * contrast controls. */
   intensityMax: number[];
   segments: SegmentTileSource[];
+  points: PointTileSource[];
 }
 
 export async function fetchManifest(read: ReadRange): Promise<SlideManifest> {
@@ -51,6 +54,7 @@ export async function loadSlide(read: ReadRange): Promise<LoadedSlide> {
   const segments = segmentLayers(manifest).map(
     (spec) => new SegmentTileSource(read, spec),
   );
+  const points = pointLayers(manifest).map((spec) => new PointTileSource(read, spec));
   return {
     manifest,
     channels,
@@ -58,5 +62,6 @@ export async function loadSlide(read: ReadRange): Promise<LoadedSlide> {
     pixelSize: pyramids[0].pixelSize,
     intensityMax: pyramids.map((p) => p.max),
     segments,
+    points,
   };
 }

@@ -63,16 +63,23 @@ export class FeatureTable {
 
 let wasmReady: Promise<unknown> | null = null;
 
+/** One parquet file as an Arrow table, or null if it isn't there. The wasm
+ * module initialises once for the whole app — point layers read their gene
+ * table through here too, so there is one parquet path, not two. */
+export async function tableFromParquet(read: ReadRange, path: string) {
+  const bytes = await read(path);
+  if (!bytes) return null;
+  wasmReady ??= initParquetWasm({ module_or_path: parquetWasmUrl });
+  await wasmReady;
+  return tableFromIPC(readParquet(bytes).intoIPCStream());
+}
+
 export async function loadFeatures(
   read: ReadRange,
   layerPath: string,
 ): Promise<FeatureTable | null> {
-  const bytes = await read(`${layerPath}/features.parquet`);
-  if (!bytes) return null;
-  wasmReady ??= initParquetWasm({ module_or_path: parquetWasmUrl });
-  await wasmReady;
-
-  const table = tableFromIPC(readParquet(bytes).intoIPCStream());
+  const table = await tableFromParquet(read, `${layerPath}/features.parquet`);
+  if (!table) return null;
   const features = new Map<string, Feature>();
   for (const field of table.schema.fields) {
     if (NON_MEASUREMENT.has(field.name)) continue;
