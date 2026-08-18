@@ -9,7 +9,7 @@
  * viewer there is exactly one place display orientation lives: the view.
  */
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { OrthographicView } from '@deck.gl/core';
 import DeckGL from '@deck.gl/react';
 
@@ -26,6 +26,30 @@ import { imageLayer } from './image';
 import { pointTileLayer, selectPointLevel } from './points';
 import { segmentTileLayer, segmentTooltip } from './segments';
 
+/** Where the camera is now, in full-resolution image pixels, plus the size
+ * of the canvas it is looking through — enough to work out the visible
+ * rectangle. The minimap reads it; nothing else needs it. */
+export interface CameraView {
+  x: number;
+  y: number;
+  zoom: number;
+  /** Canvas size in CSS pixels. */
+  width: number;
+  height: number;
+}
+
+/** A "put the camera here" request, in image pixels. `seq` counts requests:
+ * deck resets its own view state only when `initialViewState` differs from
+ * the last one it was given (a depth-3 deep-equal), so clicking the same
+ * spot on the minimap twice — pan away in between — has to look different
+ * or the second click would do nothing. */
+export interface Recenter {
+  x: number;
+  y: number;
+  zoom: number;
+  seq: number;
+}
+
 /** World µm covered by one screen pixel. View space is full-resolution image
  * pixels, so a screen pixel spans 2^-zoom of them, each `pixelSize` µm wide. */
 function worldPerPixel(pixelSize: number, zoom: number): number {
@@ -37,6 +61,8 @@ export function SlideViewer({
   settings,
   features,
   initialView,
+  camera,
+  recenter,
 }: {
   slide: LoadedSlide;
   settings: SlideSettings;
@@ -45,6 +71,13 @@ export function SlideViewer({
   features: Record<string, FeatureTable | null>;
   /** [x, y, zoom] in full-res pixel coords — the `?view=` URL param. */
   initialView?: [number, number, number];
+  /** Written on every camera move, for the minimap to read on its own
+   * timer. A ref, not state: the camera moves every frame of a drag and
+   * re-rendering React that often would spend the frame budget the
+   * renderer just bought. */
+  camera?: React.MutableRefObject<CameraView | null>;
+  /** Latest recentre request, or null while the camera is the user's own. */
+  recenter?: Recenter | null;
 }) {
   const [, height, width] = slide.loader[0].shape;
   const segmentsOn = settings.sections.segments?.checked ?? true;
@@ -65,6 +98,45 @@ export function SlideViewer({
   const [pointLevel, setPointLevel] = useState(() =>
     selectPointLevel(pointLevels, worldPerPixel(slide.pixelSize, zoom)),
   );
+
+  const live = useRef<CameraView>({
+    x: cx,
+    y: cy,
+    zoom,
+    width: window.innerWidth,
+    height: window.innerHeight,
+  });
+  const publish = (patch: Partial<CameraView>) => {
+    live.current = { ...live.current, ...patch };
+    if (camera) camera.current = live.current;
+  };
+  // Deck only calls back once something moves, so the opening camera has to
+  // be handed over by hand or the minimap would draw no rectangle until the
+  // first drag.
+  useEffect(() => publish({}), [camera]);
+  // A recentre is deck overwriting its own view state, which fires no
+  // `onViewStateChange` — so the rectangle would sit where the camera used
+  // to be until the next drag. Report it here instead.
+  useEffect(() => {
+    if (recenter) publish({ x: recenter.x, y: recenter.y, zoom: recenter.zoom });
+  }, [recenter]);
+
+  const opening = {
+    target: [cx, cy, 0] as [number, number, number],
+    zoom,
+    minZoom: fitZoom - 1,
+    maxZoom: 6,
+  };
+  // Rebuilt every render, but deck compares by value, so an unrelated
+  // re-render (a panel setting, say) can't snap the camera back.
+  const viewState = recenter
+    ? {
+        ...opening,
+        target: [recenter.x, recenter.y, 0] as [number, number, number],
+        zoom: recenter.zoom,
+        seq: recenter.seq,
+      }
+    : opening;
 
   const layers = [
     imageLayer(slide, settings),
@@ -98,19 +170,17 @@ export function SlideViewer({
       views={new OrthographicView({ id: 'ortho' })}
       deviceProps={{ webgl: { antialias: false } }}
       controller={true}
-      initialViewState={{
-        target: [cx, cy, 0],
-        zoom,
-        minZoom: fitZoom - 1,
-        maxZoom: 6,
-      }}
+      initialViewState={viewState}
       layers={layers}
-      onViewStateChange={({ viewState }) => {
-        const next = selectPointLevel(
+      onResize={({ width: w, height: h }) => publish({ width: w, height: h })}
+      onViewStateChange={({ viewState: next }) => {
+        const state = next as { target: number[]; zoom: number };
+        publish({ x: state.target[0], y: state.target[1], zoom: state.zoom });
+        const level = selectPointLevel(
           pointLevels,
-          worldPerPixel(slide.pixelSize, (viewState as { zoom: number }).zoom),
+          worldPerPixel(slide.pixelSize, state.zoom),
         );
-        if (next !== pointLevel) setPointLevel(next);
+        if (level !== pointLevel) setPointLevel(level);
       }}
       getTooltip={segmentTooltip}
       style={{ background: '#000' }}

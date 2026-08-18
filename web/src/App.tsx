@@ -22,7 +22,7 @@ import { loadGenes, type GeneTable } from './io/points';
 import { desktopHost } from './io/host';
 import { readerFor } from './io/read';
 import { loadSlide, type LoadedSlide } from './io/slide';
-import { SlideViewer } from './render/scene';
+import { SlideViewer, type CameraView, type Recenter } from './render/scene';
 import type { CustomColors } from './ui/color-picker';
 import { Panel } from './ui/panel';
 
@@ -60,6 +60,18 @@ export default function App() {
     remove: (hex) => setCustomColors((prev) => prev.filter((c) => c !== hex)),
   };
 
+  // Where the camera is (written by the scene on every move, read by the
+  // minimap on its own timer) and where the minimap has asked it to go.
+  const camera = useRef<CameraView | null>(null);
+  const [recenter, setRecenter] = useState<Recenter | null>(null);
+  const recenterTo = (x: number, y: number) => {
+    const view = camera.current;
+    if (!view) return;
+    // Keep the zoom the user is at — a navigator moves the camera, it does
+    // not re-frame the slide.
+    setRecenter((prev) => ({ x, y, zoom: view.zoom, seq: (prev?.seq ?? 0) + 1 }));
+  };
+
   // The menu acts on whatever slide is loaded *now*, so it reads a ref rather
   // than closing over one — the listeners are registered once, not per slide.
   const slideRef = useRef<LoadedSlide | null>(null);
@@ -85,6 +97,7 @@ export default function App() {
     setFeatures({});
     setGenes({});
     setError(null);
+    setRecenter(null);
     loadSlide(readerFor(slideUrl))
       .then((loaded) => {
         if (cancelled) return;
@@ -177,6 +190,8 @@ export default function App() {
         settings={settings}
         features={features}
         initialView={initialView}
+        camera={camera}
+        recenter={recenter}
       />
       <Panel
         slide={slide}
@@ -184,6 +199,8 @@ export default function App() {
         features={features}
         genes={genes}
         custom={custom}
+        camera={camera}
+        onRecenter={recenterTo}
         onChange={(key, patch) =>
           setSettings((prev) =>
             prev

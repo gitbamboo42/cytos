@@ -180,9 +180,22 @@ allows an ESM preload only with the sandbox off; and a shell exporting
 `ELECTRON_RUN_AS_NODE=1` (Claude Code's does) makes the binary act as plain
 node — no window, and `--version` prints node's.
 
-Not built yet: points/transcripts, session save/load, the minimap, and adding
-a channel or segmentation to an open slide. The app is unsigned, which only
-matters for a build someone *downloads*, never for one built here.
+The navigator at the top of the panel (`ui/minimap.tsx`, the twin of Qt's
+`ui/minimap.py`) works in the scene's own coordinates — full-resolution image
+pixels — so the canvas is sized to the image's aspect ratio and one scale
+factor maps between them, with nothing to letterbox. Its thumbnail is the
+coarsest pyramid level of every channel, composited by `compositeThumbnail`
+the same way the scene composites tiles (clim, then flat colour, then add), so
+it cannot drift from what is on screen. The camera reaches it as a **ref the
+scene writes and the minimap reads on a 100 ms timer**, not as React state:
+the camera moves every frame of a drag, and re-rendering React that often
+spends the frame budget the renderer just bought. The master Images switch is
+deliberately left out of the thumbnail — turning the image off to look at
+segments should not blank the map you navigate by. Qt does the same.
+
+Not built yet: session save/load, and adding a channel or segmentation to an
+open slide. The app is unsigned, which only matters for a build someone
+*downloads*, never for one built here.
 
 ## The cross-language contract
 
@@ -301,6 +314,13 @@ pygfx/Qt ones are in `developers_qt.md`.
   renderer's `_make_outline` — because `PathLayer`'s miter-joined quads cost
   about twice as much (6 vertices and 4 projected positions per segment
   against 4 and 2). Together: 7.6 → 60 fps.
+- **Deck resets its camera only when `initialViewState` *differs*, and never
+  reports that reset.** It deep-equals (depth 3) the old value against the new
+  one, so re-rendering React with the same numbers can't snap the camera back
+  — but clicking the same minimap spot twice, having panned away in between,
+  would also do nothing. `render/scene.tsx` therefore counts requests into the
+  view state it passes (`seq`), and publishes the new camera itself, since the
+  overwrite fires no `onViewStateChange`.
 - **viv takes one flat RGB per channel** (`ColorPaletteExtension`), so a ramp
   colormap on a web image channel silently renders as its top color; offering
   ramps there needs a LUT in the shader.

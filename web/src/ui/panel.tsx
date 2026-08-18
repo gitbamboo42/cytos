@@ -17,8 +17,10 @@ import {
   type SegmentSettings,
   type SlideSettings,
 } from '../core/session';
+import type { CameraView } from '../render/scene';
 import type { CustomColors } from './color-picker';
 import { Section, styles } from './controls';
+import { Minimap } from './minimap';
 import { ImageRow, PointRow, SegmentRow } from './rows';
 
 interface PanelProps {
@@ -35,6 +37,9 @@ interface PanelProps {
     patch: Partial<ImageSettings & SegmentSettings & PointSettings>,
   ) => void;
   onSectionChange: (name: string, patch: Partial<SectionSettings>) => void;
+  /** The live camera and the way to move it — the navigator's two wires. */
+  camera: React.MutableRefObject<CameraView | null>;
+  onRecenter: (x: number, y: number) => void;
 }
 
 export function Panel({
@@ -45,6 +50,8 @@ export function Panel({
   custom,
   onChange,
   onSectionChange,
+  camera,
+  onRecenter,
 }: PanelProps) {
   const images = slide.channels;
   const segments = slide.segments.map((s) => s.spec);
@@ -52,6 +59,14 @@ export function Panel({
 
   return (
     <div style={styles.panel}>
+      {images.length > 0 && (
+        <Minimap
+          slide={slide}
+          settings={settings}
+          camera={camera}
+          onRecenter={onRecenter}
+        />
+      )}
       {images.length > 0 && (
         <Section
           title="Images"

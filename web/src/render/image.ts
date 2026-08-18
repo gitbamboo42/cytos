@@ -51,3 +51,63 @@ export async function autocontrast(
   const hi = sample[Math.ceil(0.995 * (sample.length - 1))];
   return hi > lo ? [lo, hi] : [lo, lo + 1];
 }
+
+/** One channel's pixels at some pyramid level — what viv's `getRaster`
+ * returns, narrowed to what the thumbnail needs. */
+export interface Raster {
+  data: ArrayLike<number>;
+  width: number;
+  height: number;
+}
+
+/** Every channel's coarsest pyramid level, read once. That level is already
+ * small (a few hundred KB — it is what `autocontrast` reads), and it is the
+ * whole slide in one array, which is exactly what a navigator thumbnail
+ * needs and no tiled read can give it. */
+export async function coarsestRasters(
+  loader: ChannelStackSource[],
+  channels: number,
+): Promise<Raster[]> {
+  const lowest = loader[loader.length - 1];
+  return Promise.all(
+    Array.from({ length: channels }, (_, c) => lowest.getRaster({ selection: { c } })),
+  );
+}
+
+/** Composite the channel rasters the way the main view composites tiles —
+ * normalize by clim, multiply by the channel's flat colour, add — so the
+ * thumbnail can't drift from the scene. Returns straight RGBA bytes, ready
+ * for `putImageData`. Same maths as viv's ColorPaletteExtension, which is
+ * why a channel's colour comes from `colorValueRgb` here too.
+ *
+ * `Uint8ClampedArray` does the additive clamp on every store, so an
+ * over-bright sum saturates to white instead of wrapping. */
+export function compositeThumbnail(
+  rasters: Raster[],
+  channels: { visible: boolean; clim: [number, number]; color: [number, number, number] }[],
+): { width: number; height: number; rgba: Uint8ClampedArray<ArrayBuffer> } {
+  const { width, height } = rasters[0];
+  const count = width * height;
+  // Built on a plain ArrayBuffer, not the default: `ImageData` takes only
+  // that one, never a shared buffer.
+  const rgba = new Uint8ClampedArray(new ArrayBuffer(count * 4));
+  for (let i = 0; i < count; i++) rgba[i * 4 + 3] = 255;
+
+  rasters.forEach((raster, c) => {
+    const channel = channels[c];
+    if (!channel?.visible) return;
+    const [lo, hi] = channel.clim;
+    const span = Math.max(hi - lo, 1e-6);
+    const [r, g, b] = channel.color;
+    const { data } = raster;
+    for (let i = 0; i < count; i++) {
+      const t = (data[i] - lo) / span;
+      if (t <= 0) continue;
+      const level = t > 1 ? 1 : t;
+      rgba[i * 4] += level * r;
+      rgba[i * 4 + 1] += level * g;
+      rgba[i * 4 + 2] += level * b;
+    }
+  });
+  return { width, height, rgba };
+}
