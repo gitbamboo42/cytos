@@ -368,3 +368,14 @@
   letter-spacing: 0.08em;
   font-size: 10px;
 }
+
+/* A dropdown entry that is shown but cannot be picked — a session another
+   window already has open. */
+.dd-item.off {
+  color: #666;
+  cursor: default;
+}
+
+.dd-item.off:hover {
+  background: none;
+}

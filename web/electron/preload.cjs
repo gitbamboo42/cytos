@@ -26,4 +26,21 @@ contextBridge.exposeInMainWorld('cytos', {
   onResetSettings: (callback) => {
     ipcRenderer.on('cytos:reset-settings', () => callback());
   },
+
+  openedSession: (name) => ipcRenderer.invoke('cytos:session-open', name),
+
+  sessionsInUse: () => ipcRenderer.invoke('cytos:sessions-in-use'),
+
+  onSessionsInUse: (callback) => {
+    ipcRenderer.on('cytos:sessions-in-use', (_event, names) => callback(names));
+  },
+
+  listSessions: (base) => ipcRenderer.invoke('cytos:sessions:list', base),
+
+  readSession: (base, slug) => ipcRenderer.invoke('cytos:sessions:read', base, slug),
+
+  writeSession: (base, slug, text) =>
+    ipcRenderer.invoke('cytos:sessions:write', base, slug, text),
+
+  deleteSession: (base, slug) => ipcRenderer.invoke('cytos:sessions:delete', base, slug),
 });

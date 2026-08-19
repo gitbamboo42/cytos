@@ -33,6 +33,30 @@ export interface DesktopHost {
 
   /** View ▸ Reset to Slide Defaults. */
   onResetSettings(callback: () => void): void;
+
+  /** Say which session this window now holds, and get back the ones its
+   * siblings hold. One window, one session — as in Qt, because a session is
+   * one file and the second writer would overwrite the first. */
+  openedSession(name: string | null): Promise<string[]>;
+
+  /** Sessions open in the *other* windows on this window's slide. */
+  sessionsInUse(): Promise<string[]>;
+
+  /** That set changed — a sibling opened, switched or closed. */
+  onSessionsInUse(callback: (names: string[]) => void): void;
+
+  /** Every `<slide>/sessions/*.json`, as the picker needs to list them:
+   * the name inside the file and when it was last written. */
+  listSessions(base: string): Promise<{ name: string; modified: number | null }[]>;
+
+  /** `<slide>/sessions/<slug>.json` as text, or null if there is none. */
+  readSession(base: string, slug: string): Promise<string | null>;
+
+  /** Write that file, replacing it atomically — a slide can be open in two
+   * windows, and a half-written session is one that no longer loads. */
+  writeSession(base: string, slug: string, text: string): Promise<void>;
+
+  deleteSession(base: string, slug: string): Promise<void>;
 }
 
 declare global {

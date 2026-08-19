@@ -46,6 +46,7 @@ export function Dropdown({
   value,
   options,
   labels,
+  disabled,
   onChange,
   grow,
 }: {
@@ -53,6 +54,9 @@ export function Dropdown({
   options: string[];
   /** Display text per option; defaults to the option itself. */
   labels?: Record<string, string>;
+  /** Options that are shown but cannot be picked — the session picker greys
+   * out a name another window already has open, as Qt's does. */
+  disabled?: string[];
   onChange: (value: string) => void;
   grow?: boolean;
 }) {
@@ -83,18 +87,24 @@ export function Dropdown({
       </button>
       {open && (
         <div className="dd-list">
-          {options.map((option) => (
-            <div
-              key={option}
-              className={option === value ? 'dd-item selected' : 'dd-item'}
-              onClick={() => {
-                onChange(option);
-                setOpen(false);
-              }}
-            >
-              {labels?.[option] ?? option}
-            </div>
-          ))}
+          {options.map((option) => {
+            const off = disabled?.includes(option) && option !== value;
+            return (
+              <div
+                key={option}
+                className={
+                  off ? 'dd-item off' : option === value ? 'dd-item selected' : 'dd-item'
+                }
+                onClick={() => {
+                  if (off) return;
+                  onChange(option);
+                  setOpen(false);
+                }}
+              >
+                {labels?.[option] ?? option}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

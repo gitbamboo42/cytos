@@ -20,6 +20,7 @@ import {
   type SegmentSettings,
   type SlideSettings,
 } from '../core/session';
+import type { ViewRect } from '../core/session';
 import type { FeatureTable } from '../io/features';
 import type { LoadedSlide } from '../io/slide';
 import { imageLayer } from './image';
@@ -61,6 +62,7 @@ export function SlideViewer({
   settings,
   features,
   initialView,
+  openingRect,
   camera,
   recenter,
 }: {
@@ -69,8 +71,14 @@ export function SlideViewer({
   /** Per-cell attribute tables, keyed by segments layer key; null until
    * that layer's features.parquet arrives. */
   features: Record<string, FeatureTable | null>;
-  /** [x, y, zoom] in full-res pixel coords — the `?view=` URL param. */
+  /** [x, y, zoom] in full-res pixel coords — the `?view=` URL param. An
+   * explicit instruction, zoom and all, so it needs no fitting. */
   initialView?: [number, number, number];
+  /** The region to open on — a session's saved camera. Fitted to the canvas
+   * here rather than by the caller, because at first paint the canvas is not
+   * yet the size it will be a frame later, and a restored view fitted to
+   * that momentary size opens at the wrong zoom. Null fits the whole slide. */
+  openingRect?: ViewRect | null;
   /** Written on every camera move, for the minimap to read on its own
    * timer. A ref, not state: the camera moves every frame of a drag and
    * re-rendering React that often would spend the frame budget the
@@ -83,10 +91,23 @@ export function SlideViewer({
   const segmentsOn = settings.sections.segments?.checked ?? true;
   const pointsOn = settings.sections.points?.checked ?? true;
 
+  // The canvas as deck last measured it. State, so the opening view is
+  // re-fitted once the real size arrives — but only until the camera is the
+  // user's, after which nothing here may move it again.
+  const [canvas, setCanvas] = useState({
+    width: window.innerWidth,
+    height: window.innerHeight,
+  });
+  const moved = useRef(false);
+
+  const rect = openingRect ?? { x: width / 2, y: height / 2, width, height };
   const fitZoom = Math.log2(
-    Math.min(window.innerWidth / width, window.innerHeight / height),
+    Math.min(canvas.width / rect.width, canvas.height / rect.height),
   );
-  const [cx, cy, zoom] = initialView ?? [width / 2, height / 2, fitZoom];
+  // How far out the whole slide sits, which is as far out as anyone needs to
+  // go — one step further, whatever the opening view happens to be.
+  const slideZoom = Math.log2(Math.min(canvas.width / width, canvas.height / height));
+  const [cx, cy, zoom] = initialView ?? [rect.x, rect.y, fitZoom];
   const pointLevels = Math.max(...slide.points.map((p) => p.levels), 1);
 
   // Which point detail level the current zoom deserves. State, not a
@@ -124,7 +145,7 @@ export function SlideViewer({
   const opening = {
     target: [cx, cy, 0] as [number, number, number],
     zoom,
-    minZoom: fitZoom - 1,
+    minZoom: slideZoom - 1,
     maxZoom: 6,
   };
   // Rebuilt every render, but deck compares by value, so an unrelated
@@ -172,9 +193,13 @@ export function SlideViewer({
       controller={true}
       initialViewState={viewState}
       layers={layers}
-      onResize={({ width: w, height: h }) => publish({ width: w, height: h })}
+      onResize={({ width: w, height: h }) => {
+        publish({ width: w, height: h });
+        if (!moved.current) setCanvas({ width: w, height: h });
+      }}
       onViewStateChange={({ viewState: next }) => {
         const state = next as { target: number[]; zoom: number };
+        moved.current = true;
         publish({ x: state.target[0], y: state.target[1], zoom: state.zoom });
         const level = selectPointLevel(
           pointLevels,

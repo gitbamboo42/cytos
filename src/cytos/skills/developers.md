@@ -122,11 +122,11 @@ one ranged GET, the same as a directory would cost. `ReadRange` in
 `web/src/io/read.ts` is the one place bytes enter the web app — an Electron
 local-file reader lands there and nowhere else.
 
-`cytos.json` holds each layer's *defaults*; `session.json` (same folder, written
-on window close) holds only your overrides plus camera and window state. Two
-files, so View > Reset to Slide Defaults can just drop the session and re-read
-the manifest. See `src/cytos/core/session.py`. The web viewer reads manifest
-defaults and does not write sessions yet.
+`cytos.json` holds each layer's *defaults*; a session (`sessions/<slug>.json`
+in the same folder) holds only your overrides plus camera and window state.
+Two files, so View > Reset to Slide Defaults can just drop the session and
+re-read the manifest. See `src/cytos/core/session.py`; both viewers write the
+same document.
 
 The importer writes the manifest, but it is no longer the only thing that does:
 `cytos.prep.segments.add_segments_to_slide` appends a segmentation layer to a
@@ -193,9 +193,27 @@ spends the frame budget the renderer just bought. The master Images switch is
 deliberately left out of the thumbnail — turning the image off to look at
 segments should not blank the map you navigate by. Qt does the same.
 
-Not built yet: session save/load, and adding a channel or segmentation to an
-open slide. The app is unsigned, which only matters for a build someone
-*downloads*, never for one built here.
+Sessions are saved and restored. Two decisions behind `io/sessions.ts` and
+`io/presence.ts` that the code cannot tell you: **a session never goes to the
+slide server** — the slide is read-only and static, a session is personal and
+mutable, and keeping them apart is what keeps the read path free (a
+server-backed store would be a third backend in that one file); and **one
+window holds one session**, since a session is one file and a second writer
+would overwrite the first. That rule is why the shell has windows at all
+(File ▸ New Window) and why it takes a single-instance lock — it is only
+enforceable among windows one process can see, exactly as in Qt.
+
+Two traps. A saved camera is a world-µm rectangle, and the fit to a zoom
+belongs in `render/scene.tsx`: at first paint the canvas is not yet the size
+it will be a frame later, and fitting to that momentary size opened restored
+views 2.4x too wide. And fields only Qt understands (its `window` blob, a
+segment row's `category_colors`) must ride through a save untouched, or
+opening someone's session here quietly throws half of it away.
+
+Not built yet: annotations (selections, which will be documents of their own
+rather than part of a session — Reset must never destroy authored work) and
+adding a channel or segmentation to an open slide. The app is unsigned, which only
+matters for a build someone *downloads*, never for one built here.
 
 ## The cross-language contract
 
@@ -207,7 +225,7 @@ side, change the other in the same commit.**
 |---|---|---|
 | slide format version | `CYTOS_FORMAT`, `core/slide.py` | `core/manifest.ts` |
 | tile world size | `tile_world_size`, `core/tiling.py` | `core/manifest.ts` |
-| session vocabulary | `core/session.py` | `core/session.ts` |
+| session vocabulary, format, name slug | `core/session.py` | `core/session.ts` |
 | channel hues, color presets | `render/image.py` | `core/colormaps.ts` |
 | non-measurement columns | `feature_names`, `core/polygons.py` | `io/features.ts` |
 | categorical marker | `core/polygons.py` | `io/features.ts` |

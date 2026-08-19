@@ -17,7 +17,7 @@
  */
 
 import { app, BrowserWindow, Menu, dialog, ipcMain } from 'electron';
-import { open } from 'node:fs/promises';
+import { mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -31,6 +31,24 @@ app.setName('cytos');
 const DEV_URL = process.env.CYTOS_DEV_URL;
 
 /**
+ * One process, as in the Qt viewer: launching again raises the app that is
+ * already running rather than starting a second one. Not a nicety — "no two
+ * windows share a session" can only be enforced among windows one process
+ * can see, and two processes over one slide would quietly write the same
+ * session file. It also rules out the confusion of a second copy running
+ * older code than the page it loads.
+ */
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', (_event, argv) => {
+    const named = argv.slice(1).find((a) => a.endsWith('.cytos'));
+    if (named) openSlide(path.resolve(named));
+    else BrowserWindow.getAllWindows()[0]?.focus();
+  });
+}
+
+/**
  * Slide directories the user has actually opened, by dialog or on the command
  * line. The renderer names the file it wants, so main checks that the name
  * resolves inside one of these — a bug in the page can then only read the
@@ -38,10 +56,51 @@ const DEV_URL = process.env.CYTOS_DEV_URL;
  */
 const allowed = new Set();
 
-let win = null;
-/** The slide to show once the page asks for it (argv, or a menu open that
- * arrives before the window has loaded). */
-let pending = null;
+/**
+ * Windows, and what each is looking at.
+ *
+ * A window is bound to one slide and one session, exactly as in the Qt
+ * viewer: two views of the same slide are two windows, and no two windows
+ * share a session, because a session is one file and the second writer would
+ * silently overwrite the first. Main is the authority on who holds what —
+ * it can see every window, which no page can.
+ */
+const windows = new Map(); // BrowserWindow -> { slide, session }
+
+function stateOf(contents) {
+  for (const [w, state] of windows) {
+    if (w.webContents === contents) return { window: w, state };
+  }
+  return null;
+}
+
+/** Sessions this slide has open in windows other than `except`. */
+function sessionsInUse(slide, except) {
+  const names = [];
+  for (const [w, state] of windows) {
+    if (w !== except && state.slide === slide && state.session) names.push(state.session);
+  }
+  return names;
+}
+
+/** Tell every window on this slide what the others hold, so their pickers
+ * can grey those names out. */
+function broadcastInUse(slide) {
+  for (const [w, state] of windows) {
+    if (state.slide === slide) {
+      w.webContents.send('cytos:sessions-in-use', sessionsInUse(slide, w));
+    }
+  }
+}
+
+function retitle(w) {
+  const state = windows.get(w);
+  if (!state?.slide) return;
+  // The session is in the title because it is what tells two windows on the
+  // same slide apart — the same reason the Qt viewer puts it there.
+  const name = path.basename(state.slide);
+  w.setTitle(state.session ? `cytos — ${name} · ${state.session}` : `cytos — ${name}`);
+}
 
 function slideFromArgv() {
   const arg = process.argv.slice(1).find((a) => a.endsWith('.cytos'));
@@ -55,21 +114,33 @@ function insideAllowed(full) {
   return false;
 }
 
-function openSlide(dir) {
+/**
+ * Show a slide. An empty window takes it; otherwise a new window opens, so
+ * opening a second slide — or a second view of the same one — never disturbs
+ * what you were already looking at. Qt's File ▸ Open Slide… does the same.
+ */
+function openSlide(dir, target) {
   const full = path.resolve(dir);
   allowed.add(full);
-  pending = full;
   app.addRecentDocument(full);
-  if (win) {
-    win.setTitle(`cytos — ${path.basename(full)}`);
-    win.webContents.send('cytos:open-slide', full);
+  const empty = target ?? [...windows].find(([, state]) => !state.slide)?.[0];
+  if (!empty) {
+    createWindow(full);
+    return;
   }
+  const state = windows.get(empty);
+  state.slide = full;
+  state.session = null;
+  retitle(empty);
+  empty.webContents.send('cytos:open-slide', full);
+  broadcastInUse(full);
 }
 
 async function promptOpenSlide() {
+  const focused = BrowserWindow.getFocusedWindow();
   // A `.cytos` slide is a directory, so this is a directory chooser — the
   // same choice the Qt viewer's File ▸ Open Slide… makes.
-  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+  const { canceled, filePaths } = await dialog.showOpenDialog(focused ?? undefined, {
     title: 'Open Slide',
     buttonLabel: 'Open',
     properties: ['openDirectory'],
@@ -77,8 +148,30 @@ async function promptOpenSlide() {
   if (!canceled && filePaths[0]) openSlide(filePaths[0]);
 }
 
-ipcMain.handle('cytos:initial-slide', () => pending);
+/** File ▸ New Window: a second view of the slide you are on. */
+function newWindow() {
+  const focused = BrowserWindow.getFocusedWindow();
+  createWindow(windows.get(focused)?.slide ?? null);
+}
+
+ipcMain.handle('cytos:initial-slide', (event) => stateOf(event.sender)?.state.slide ?? null);
 ipcMain.handle('cytos:open-dialog', promptOpenSlide);
+
+/** Which session this window holds. Windows announce it as they open one,
+ * and main answers "what are the others holding?" from the same book. */
+ipcMain.handle('cytos:session-open', (event, name) => {
+  const found = stateOf(event.sender);
+  if (!found) return [];
+  found.state.session = name;
+  retitle(found.window);
+  broadcastInUse(found.state.slide);
+  return sessionsInUse(found.state.slide, found.window);
+});
+
+ipcMain.handle('cytos:sessions-in-use', (event) => {
+  const found = stateOf(event.sender);
+  return found ? sessionsInUse(found.state.slide, found.window) : [];
+});
 
 ipcMain.handle('cytos:read', async (_event, base, rel, start, end) => {
   const full = path.resolve(base, rel);
@@ -121,18 +214,93 @@ ipcMain.handle('cytos:read', async (_event, base, rel, start, end) => {
 });
 
 /**
- * Four menus, and only one of them holds a command of ours. A read-only
- * viewer has almost nothing to put in a menu bar, so most of Electron's
- * stock roles were cut rather than kept for the look of it.
+ * Sessions: the same `<slide>/sessions/<slug>.json` files the Qt viewer
+ * writes, so the two viewers open each other's saved views. The page never
+ * names a path — it names a slide it already had open and a slug, and the
+ * three checks below (inside an opened slide, under `sessions/`, a slug of
+ * safe characters) are what keep it to that folder.
  *
- * Two menus. The app menu is macOS's, shown whatever we do, and Quit lives in
- * it; File holds the two commands the shell exists to give.
+ * The slug rule is `slugify` in `src/cytos/core/session.py`; anything else
+ * is refused rather than sanitized, because a silently renamed session is a
+ * session someone cannot find again.
+ */
+const SLUG = /^[a-z0-9._-]+$/;
+
+function sessionFile(base, slug) {
+  if (!SLUG.test(slug)) throw new Error(`bad session name: ${slug}`);
+  const dir = path.resolve(base, 'sessions');
+  if (!insideAllowed(dir)) {
+    throw new Error(`refusing to touch sessions outside an opened slide: ${dir}`);
+  }
+  return path.join(dir, `${slug}.json`);
+}
+
+ipcMain.handle('cytos:sessions:list', async (_event, base) => {
+  const dir = path.resolve(base, 'sessions');
+  if (!insideAllowed(dir)) return [];
+  let names;
+  try {
+    names = await readdir(dir);
+  } catch {
+    return []; // no sessions folder yet — a slide nobody has saved a view of
+  }
+  const found = [];
+  for (const file of names) {
+    if (!file.endsWith('.json')) continue;
+    const full = path.join(dir, file);
+    try {
+      const doc = JSON.parse(await readFile(full, 'utf8'));
+      const { mtimeMs } = await stat(full);
+      found.push({ name: String(doc.name ?? path.basename(file, '.json')), modified: mtimeMs });
+    } catch {
+      // An unreadable session is skipped, never fatal: a broken file must
+      // not be why a slide won't open. Same rule as `list_sessions`.
+      console.warn(`${full}: ignoring unreadable session`);
+    }
+  }
+  return found;
+});
+
+ipcMain.handle('cytos:sessions:read', async (_event, base, slug) => {
+  try {
+    return await readFile(sessionFile(base, slug), 'utf8');
+  } catch (err) {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  }
+});
+
+ipcMain.handle('cytos:sessions:write', async (_event, base, slug, text) => {
+  const full = sessionFile(base, slug);
+  await mkdir(path.dirname(full), { recursive: true });
+  // Temp file then rename, the rule `write_manifest` follows: the slide may
+  // be open in another window, and replacing a good session with half a one
+  // loses the view it held.
+  const temp = `${full}.tmp`;
+  await writeFile(temp, text);
+  await rename(temp, full);
+});
+
+ipcMain.handle('cytos:sessions:delete', async (_event, base, slug) => {
+  const full = sessionFile(base, slug);
+  await rm(full, { force: true });
+  await rm(full.replace(/\.json$/, '.png'), { force: true }); // the Qt picker's thumbnail
+});
+
+/**
+ * Three menus. A read-only viewer has little to put in a menu bar, so most
+ * of Electron's stock roles were cut rather than kept for the look of it.
  *
- * What went: Window (there is one window), View (one command does not need a
- * menu of its own — Reset moved into File), Toggle Full Screen (the green
- * button already does it), page zoom (⌘+ would enlarge the panel while the
- * viewer has a zoom of its own — two meanings for one key), Reload, and
- * Undo/Redo, which a viewer that edits nothing can never do.
+ * The app menu is macOS's, shown whatever we do, and Quit lives in it; File
+ * holds the commands the shell exists to give; Window is macOS's own, and it
+ * earns its place now that a slide can be open in several windows at once —
+ * it is how you find the other one.
+ *
+ * What went: View (one command does not need a menu of its own — Reset moved
+ * into File), Toggle Full Screen (the green button already does it), page
+ * zoom (⌘+ would enlarge the panel while the viewer has a zoom of its own —
+ * two meanings for one key), Reload, and Undo/Redo, which a viewer that edits
+ * nothing can never do.
  *
  * **Edit went too, and that is why `clipboardKeys` exists.** macOS appends
  * Writing Tools, Start Dictation and Emoji & Symbols to any menu it takes for
@@ -151,10 +319,13 @@ function buildMenu() {
     {
       label: 'File',
       submenu: [
-        { label: 'Open Slide…', accelerator: 'CmdOrCtrl+O', click: promptOpenSlide },
+        // Ids so a test can click them; nothing in the app looks them up.
+        { id: 'open-slide', label: 'Open Slide…', accelerator: 'CmdOrCtrl+O', click: promptOpenSlide },
+        { id: 'new-window', label: 'New Window', accelerator: 'CmdOrCtrl+N', click: newWindow },
         {
           label: 'Reset to Slide Defaults',
-          click: () => win?.webContents.send('cytos:reset-settings'),
+          click: () =>
+            BrowserWindow.getFocusedWindow()?.webContents.send('cytos:reset-settings'),
         },
         { type: 'separator' },
         isMac ? { role: 'close' } : { role: 'quit' },
@@ -163,6 +334,7 @@ function buildMenu() {
         ...(app.isPackaged ? [] : [{ type: 'separator' }, { role: 'toggleDevTools' }]),
       ],
     },
+    { role: 'windowMenu' },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
@@ -187,8 +359,8 @@ function clipboardKeys(contents) {
   });
 }
 
-function createWindow() {
-  win = new BrowserWindow({
+function createWindow(slide = null) {
+  const win = new BrowserWindow({
     width: 1400,
     height: 900,
     backgroundColor: '#000',
@@ -208,9 +380,22 @@ function createWindow() {
   // set, so refuse the update.
   win.on('page-title-updated', (event) => event.preventDefault());
   clipboardKeys(win.webContents);
-  if (pending) win.setTitle(`cytos — ${path.basename(pending)}`);
+  windows.set(win, { slide, session: null });
+  retitle(win);
+  win.on('closed', () => {
+    const slideWas = windows.get(win)?.slide;
+    windows.delete(win);
+    // The session it held is free again, so the other windows' pickers
+    // stop greying that name out.
+    if (slideWas) broadcastInUse(slideWas);
+  });
+  // Windows cascade rather than stack exactly, so a second view of a slide
+  // is visibly a second window. Qt offsets its own the same way.
+  const [x, y] = BrowserWindow.getFocusedWindow()?.getPosition() ?? [];
+  if (x !== undefined) win.setPosition(x + 32, y + 32);
   if (DEV_URL) win.loadURL(DEV_URL);
   else win.loadFile(path.join(here, '..', 'dist', 'index.html'));
+  return win;
 }
 
 // macOS: double-clicking a slide in Finder, or dropping one on the Dock icon.
@@ -221,9 +406,9 @@ app.on('open-file', (event, filePath) => {
 
 app.whenReady().then(() => {
   const initial = slideFromArgv();
-  if (initial) openSlide(initial);
+  if (initial) allowed.add(initial);
   buildMenu();
-  createWindow();
+  createWindow(initial);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
