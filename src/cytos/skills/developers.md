@@ -199,9 +199,30 @@ slide server** — the slide is read-only and static, a session is personal and
 mutable, and keeping them apart is what keeps the read path free (a
 server-backed store would be a third backend in that one file); and **one
 window holds one session**, since a session is one file and a second writer
-would overwrite the first. That rule is why the shell has windows at all
-(File ▸ New Window) and why it takes a single-instance lock — it is only
-enforceable among windows one process can see, exactly as in Qt.
+would overwrite the first. That rule is why the shell has windows at all —
+opening a slide always makes one (there is no File ▸ New Window; opening the
+slide you are already on is how a second view is had) — and why it takes a
+single-instance lock, since the rule is only enforceable among windows one
+process can see, exactly as in Qt.
+
+Which session a window holds is chosen on the way in, by the picker
+(`ui/session-picker.tsx`, the twin of Qt's `ui/session_picker.py`), and the
+layers panel deliberately carries no switcher: the binding lasts as long as
+the window, and swapping the file under a window mid-look is exactly what the
+one-window rule exists to stop. The picker asks only when there is something
+to choose — a slide nobody has saved a view of opens straight into "default",
+and `?session=` is an instruction, not a suggestion. Each row shows the frame
+from when that session was last written, saved beside it as
+`sessions/<slug>.png` — the same file `save_session` writes in Python, so
+either viewer's previews show up in the other's picker. A window opens at
+welcome size whatever it was given and grows to slide size only when a
+session is chosen — the picker is a short list, and Qt's is a dialog in front
+of no window at all, so a full-size window has no reason to exist before
+there is something to draw in it. The frame is read
+inside deck's `onAfterRender` (nothing else preserves the drawing buffer, and
+asking for that would slow every frame to serve one) and taken at most every
+few seconds, because reading pixels back stalls the GPU and a session is
+written every time you pan.
 
 Recent slides are the other thing that belongs to no slide, so the shell
 keeps them in the app's own data directory, in the same `recent_slides.json`

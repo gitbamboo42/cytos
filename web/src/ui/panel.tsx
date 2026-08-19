@@ -2,6 +2,11 @@
  * The layers dock: one collapsible section per layer kind, one row per
  * layer. It edits a SlideSettings object (the saved-session vocabulary, see
  * core/session.ts) and nothing else.
+ *
+ * Which session those settings belong to is not shown here and cannot be
+ * changed here: a window is bound to one session for as long as it is open,
+ * and the binding is chosen on the way in (`ui/session-picker.tsx`), exactly
+ * as in the Qt viewer.
  */
 
 import type { FeatureTable } from '../io/features';
@@ -17,12 +22,10 @@ import {
   type SegmentSettings,
   type SlideSettings,
 } from '../core/session';
-import type { SessionInfo } from '../io/sessions';
 import type { CameraView } from '../render/scene';
 import type { CustomColors } from './color-picker';
 import { Section, styles } from './controls';
 import { Minimap } from './minimap';
-import { SessionBar } from './sessions';
 import { ImageRow, PointRow, SegmentRow } from './rows';
 
 interface PanelProps {
@@ -42,14 +45,6 @@ interface PanelProps {
   /** The live camera and the way to move it — the navigator's two wires. */
   camera: React.MutableRefObject<CameraView | null>;
   onRecenter: (x: number, y: number) => void;
-  /** The slide's saved views, and which one is open. */
-  sessions: SessionInfo[];
-  sessionName: string;
-  /** Session names open in other windows on this slide. */
-  sessionsInUse: string[];
-  onSwitchSession: (name: string) => void;
-  onNewSession: (name: string) => void;
-  onDeleteSession: (name: string) => void;
 }
 
 export function Panel({
@@ -62,12 +57,6 @@ export function Panel({
   onSectionChange,
   camera,
   onRecenter,
-  sessions,
-  sessionName,
-  sessionsInUse,
-  onSwitchSession,
-  onNewSession,
-  onDeleteSession,
 }: PanelProps) {
   const images = slide.channels;
   const segments = slide.segments.map((s) => s.spec);
@@ -75,14 +64,6 @@ export function Panel({
 
   return (
     <div style={styles.panel}>
-      <SessionBar
-        sessions={sessions}
-        current={sessionName}
-        inUse={sessionsInUse}
-        onSwitch={onSwitchSession}
-        onCreate={onNewSession}
-        onDelete={onDeleteSession}
-      />
       {images.length > 0 && (
         <Minimap
           slide={slide}

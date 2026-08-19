@@ -369,19 +369,39 @@
   font-size: 10px;
 }
 
-/* A dropdown entry that is shown but cannot be picked — a session another
-   window already has open. */
-.dd-item.off {
-  color: #666;
-  cursor: default;
-}
-
-.dd-item.off:hover {
-  background: none;
-}
-
 /* Welcome-screen recents: no chrome until the pointer is on one. */
 .welcome-recent:hover {
   background: #202024;
   color: #e8e8e8;
+}
+
+/* Session picker rows: a thumbnail card, then the name and when it was
+   saved. One that another window holds is shown but not selectable. */
+.session-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border-bottom: 1px solid #232323;
+  cursor: pointer;
+}
+
+.session-row:last-child {
+  border-bottom: none;
+}
+
+.session-row:hover {
+  background: #202024;
+}
+
+.session-row.selected,
+.session-row.selected:hover {
+  background: #2f4a72;
+}
+
+.session-row.off,
+.session-row.off:hover {
+  background: none;
+  color: #666;
+  cursor: default;
 }

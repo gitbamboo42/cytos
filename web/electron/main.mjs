@@ -188,6 +188,12 @@ function insideAllowed(full) {
  * Show a slide. An empty window takes it; otherwise a new window opens, so
  * opening a second slide — or a second view of the same one — never disturbs
  * what you were already looking at. Qt's File ▸ Open Slide… does the same.
+ *
+ * That is also why there is no File ▸ New Window: opening a slide *is* how a
+ * window is made, and opening the one you are already on gives the second
+ * view — the picker then offers the sessions the first window isn't holding.
+ * An empty window is the one exception, and only because it has nothing to
+ * disturb.
  */
 function openSlide(dir, target) {
   const full = path.resolve(dir);
@@ -203,13 +209,8 @@ function openSlide(dir, target) {
     return;
   }
   const state = windows.get(empty);
-  // The welcome window is small; a slide needs the room. Only grow one that
-  // is still at its welcome size, so a window someone has resized keeps it.
-  const [w, h] = empty.getSize();
-  if (!state.slide && w === WELCOME_SIZE.width && h === WELCOME_SIZE.height) {
-    empty.setSize(SLIDE_SIZE.width, SLIDE_SIZE.height, true);
-    empty.center();
-  }
+  // No growing here: what a slide opens on is the picker, which is a short
+  // list. The room is given when a session is chosen.
   state.slide = full;
   state.session = null;
   retitle(empty);
@@ -229,12 +230,6 @@ async function promptOpenSlide() {
   if (!canceled && filePaths[0]) openSlide(filePaths[0]);
 }
 
-/** File ▸ New Window: a second view of the slide you are on. */
-function newWindow() {
-  const focused = BrowserWindow.getFocusedWindow();
-  createWindow(windows.get(focused)?.slide ?? null);
-}
-
 ipcMain.handle('cytos:initial-slide', (event) => stateOf(event.sender)?.state.slide ?? null);
 ipcMain.handle('cytos:open-dialog', promptOpenSlide);
 
@@ -244,6 +239,9 @@ ipcMain.handle('cytos:session-open', (event, name) => {
   const found = stateOf(event.sender);
   if (!found) return [];
   found.state.session = name;
+  // A session chosen means the viewer is about to draw — this is the moment
+  // the window needs slide-sized room.
+  growToSlideSize(found.window);
   retitle(found.window);
   broadcastInUse(found.state.slide);
   return sessionsInUse(found.state.slide, found.window);
@@ -365,7 +363,35 @@ ipcMain.handle('cytos:sessions:write', async (_event, base, slug, text) => {
 ipcMain.handle('cytos:sessions:delete', async (_event, base, slug) => {
   const full = sessionFile(base, slug);
   await rm(full, { force: true });
-  await rm(full.replace(/\.json$/, '.png'), { force: true }); // the Qt picker's thumbnail
+  await rm(shotFile(base, slug), { force: true });
+});
+
+/** The picker's thumbnail: `<slide>/sessions/<slug>.png`, exactly the file
+ * `save_session` writes in Python, so a session saved here shows a preview
+ * in the Qt picker and one saved there shows a preview here. */
+function shotFile(base, slug) {
+  return sessionFile(base, slug).replace(/\.json$/, '.png');
+}
+
+ipcMain.handle('cytos:sessions:read-shot', async (_event, base, slug) => {
+  try {
+    return await readFile(shotFile(base, slug));
+  } catch (err) {
+    // No thumbnail is the ordinary case for a session never saved from a
+    // viewer that takes them; the picker draws an empty card for it.
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  }
+});
+
+ipcMain.handle('cytos:sessions:write-shot', async (_event, base, slug, bytes) => {
+  const full = shotFile(base, slug);
+  await mkdir(path.dirname(full), { recursive: true });
+  // Temp file then rename, as for the session itself: the other window's
+  // picker may be listing this folder while we write into it.
+  const temp = `${full}.tmp`;
+  await writeFile(temp, Buffer.from(bytes));
+  await rename(temp, full);
 });
 
 /**
@@ -402,7 +428,6 @@ function buildMenu() {
       submenu: [
         // Ids so a test can click them; nothing in the app looks them up.
         { id: 'open-slide', label: 'Open Slide…', accelerator: 'CmdOrCtrl+O', click: promptOpenSlide },
-        { id: 'new-window', label: 'New Window', accelerator: 'CmdOrCtrl+N', click: newWindow },
         {
           label: 'Open Recent',
           submenu: [
@@ -459,15 +484,29 @@ function clipboardKeys(contents) {
   });
 }
 
-/** A window with a slide in it, and one with only the welcome screen. Qt
- * sizes its two the same way (760x480 against 1300x950): a welcome screen
- * holds a few lines, and opening it at slide size is mostly empty desk. */
+/** A window with a slide in it, and one with only a screen of text. Qt sizes
+ * its two the same way (760x480 against 1300x950): a welcome screen holds a
+ * few lines, and opening it at slide size is mostly empty desk.
+ *
+ * The session picker counts as the second kind. Every window therefore opens
+ * small and grows the moment a session is chosen — which is exactly when Qt
+ * creates its slide window, since its picker is a dialog in front of no
+ * window at all. */
 const SLIDE_SIZE = { width: 1400, height: 900 };
 const WELCOME_SIZE = { width: 760, height: 520 };
 
+/** Grow a window that is still at welcome size to slide size, centred. One
+ * that has been resized by hand keeps whatever size it was given. */
+function growToSlideSize(win) {
+  const [w, h] = win.getSize();
+  if (w !== WELCOME_SIZE.width || h !== WELCOME_SIZE.height) return;
+  win.setSize(SLIDE_SIZE.width, SLIDE_SIZE.height, true);
+  win.center();
+}
+
 function createWindow(slide = null) {
   const win = new BrowserWindow({
-    ...(slide ? SLIDE_SIZE : WELCOME_SIZE),
+    ...WELCOME_SIZE,
     backgroundColor: '#000',
     title: 'cytos',
     webPreferences: {

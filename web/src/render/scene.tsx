@@ -11,7 +11,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { OrthographicView } from '@deck.gl/core';
-import DeckGL from '@deck.gl/react';
+import DeckGL, { type DeckGLRef } from '@deck.gl/react';
 
 import {
   pointsKey,
@@ -51,6 +51,15 @@ export interface Recenter {
   seq: number;
 }
 
+/** How big a session's thumbnail is, longest side, in pixels — the same
+ * bound `_write_snapshot` uses in `src/cytos/core/session.py`, because both
+ * viewers write the same `<slug>.png` and either picker shows it. */
+const THUMB_MAX = 320;
+
+/** Takes the frame currently on screen, or null if there is nothing to take.
+ * `App.tsx` holds one of these and calls it when it writes a session. */
+export type TakeShot = () => Promise<Blob | null>;
+
 /** World µm covered by one screen pixel. View space is full-resolution image
  * pixels, so a screen pixel spans 2^-zoom of them, each `pixelSize` µm wide. */
 function worldPerPixel(pixelSize: number, zoom: number): number {
@@ -65,6 +74,7 @@ export function SlideViewer({
   openingRect,
   camera,
   recenter,
+  shot,
 }: {
   slide: LoadedSlide;
   settings: SlideSettings;
@@ -86,6 +96,10 @@ export function SlideViewer({
   camera?: React.MutableRefObject<CameraView | null>;
   /** Latest recentre request, or null while the camera is the user's own. */
   recenter?: Recenter | null;
+  /** Filled in with a way to grab the current frame, for the session's
+   * thumbnail. A ref for the same reason the camera is one: the scene owns
+   * the canvas, and handing the function up costs no re-render. */
+  shot?: React.MutableRefObject<TakeShot | null>;
 }) {
   const [, height, width] = slide.loader[0].shape;
   const segmentsOn = settings.sections.segments?.checked ?? true;
@@ -119,6 +133,56 @@ export function SlideViewer({
   const [pointLevel, setPointLevel] = useState(() =>
     selectPointLevel(pointLevels, worldPerPixel(slide.pixelSize, zoom)),
   );
+
+  const deck = useRef<DeckGLRef>(null);
+  // Set while a thumbnail has been asked for: the next frame drawn hands the
+  // canvas to this and clears it.
+  const wanted = useRef<((shot: Blob | null) => void) | null>(null);
+
+  /** The frame deck just drew, scaled down to a thumbnail.
+   *
+   * Read inside `onAfterRender` on purpose. The drawing buffer is not
+   * preserved (asking for that would slow every frame to serve one), so it
+   * holds the picture only until the browser composites it — which is after
+   * this callback, never before. Copying it into a 2D canvas here is what
+   * lets the PNG encoding itself happen later, off the frame. */
+  const grab = (gl: WebGL2RenderingContext) => {
+    const resolve = wanted.current;
+    if (!resolve) return;
+    wanted.current = null;
+    const source = gl.canvas as HTMLCanvasElement;
+    const scale = Math.min(1, THUMB_MAX / Math.max(source.width, source.height));
+    const thumb = document.createElement('canvas');
+    thumb.width = Math.max(1, Math.round(source.width * scale));
+    thumb.height = Math.max(1, Math.round(source.height * scale));
+    const ctx = thumb.getContext('2d');
+    if (!ctx) return resolve(null);
+    ctx.drawImage(source, 0, 0, thumb.width, thumb.height);
+    thumb.toBlob((blob) => resolve(blob), 'image/png');
+  };
+
+  useEffect(() => {
+    if (!shot) return;
+    shot.current = () =>
+      new Promise<Blob | null>((resolve) => {
+        const instance = deck.current?.deck;
+        if (!instance) return resolve(null);
+        wanted.current = resolve;
+        // Forced, not requested: nothing may have changed since the last
+        // frame, and a viewer sitting still would otherwise never draw
+        // another one. `redraw` runs the render — and `onAfterRender` —
+        // before it returns, so a request still pending after this line
+        // means no frame was drawn at all.
+        instance.redraw('session thumbnail');
+        if (wanted.current === resolve) {
+          wanted.current = null;
+          resolve(null);
+        }
+      });
+    return () => {
+      shot.current = null;
+    };
+  }, [shot]);
 
   const live = useRef<CameraView>({
     x: cx,
@@ -188,6 +252,7 @@ export function SlideViewer({
 
   return (
     <DeckGL
+      ref={deck}
       views={new OrthographicView({ id: 'ortho' })}
       deviceProps={{ webgl: { antialias: false } }}
       controller={true}
@@ -207,6 +272,7 @@ export function SlideViewer({
         );
         if (level !== pointLevel) setPointLevel(level);
       }}
+      onAfterRender={({ gl }) => grab(gl)}
       getTooltip={segmentTooltip}
       style={{ background: '#000' }}
     />

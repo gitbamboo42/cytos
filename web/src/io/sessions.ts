@@ -30,6 +30,12 @@ export interface SessionStore {
   load(name: string): Promise<SavedSession | null>;
   save(name: string, doc: SavedSession): Promise<void>;
   remove(name: string): Promise<void>;
+  /** The picker's thumbnail — the rendered frame from when the session was
+   * last written, which is what makes "the tumour edge one" recognisable
+   * without opening it. Null when the session has never been saved from a
+   * viewer that takes one. */
+  loadShot(name: string): Promise<Blob | null>;
+  saveShot(name: string, shot: Blob): Promise<void>;
 }
 
 /** A session from a newer cytos is ignored, not guessed at — the same rule
@@ -85,6 +91,18 @@ class FileSessionStore implements SessionStore {
   async remove(name: string): Promise<void> {
     await this.host.deleteSession(this.slideDir, slugify(name));
   }
+
+  async loadShot(name: string): Promise<Blob | null> {
+    const bytes = await this.host.readSessionShot(this.slideDir, slugify(name));
+    // A Uint8Array over IPC, not a Blob: the bridge carries plain data, and
+    // the one place that turns it back into an image is here.
+    return bytes ? new Blob([bytes as BlobPart], { type: 'image/png' }) : null;
+  }
+
+  async saveShot(name: string, shot: Blob): Promise<void> {
+    const bytes = new Uint8Array(await shot.arrayBuffer());
+    await this.host.writeSessionShot(this.slideDir, slugify(name), bytes);
+  }
 }
 
 /**
@@ -99,6 +117,10 @@ interface SessionRecord {
   name: string;
   modified: number;
   doc: SavedSession;
+  /** The picker's thumbnail, as a PNG. IndexedDB stores a Blob as it is, so
+   * this is the same bytes the shell writes to `<slug>.png` — no base64
+   * detour, which would cost a third more space for nothing. */
+  shot?: Blob;
 }
 
 class BrowserSessionStore implements SessionStore {
@@ -134,22 +156,49 @@ class BrowserSessionStore implements SessionStore {
   }
 
   async save(name: string, doc: SavedSession): Promise<void> {
-    const db = await openDb();
-    const record: SessionRecord = {
-      key: this.key(name),
-      slide: this.slide,
-      name,
-      modified: Date.now(),
-      doc,
-    };
-    const tx = db.transaction(SESSIONS, 'readwrite');
-    await done(tx.objectStore(SESSIONS).put(record));
+    // Read then write inside one transaction, because the record holds the
+    // thumbnail too: a plain put would drop the preview every time a slider
+    // moved, and the two are written by different callers.
+    await this.update(name, (record) => ({ ...record, doc }));
   }
 
   async remove(name: string): Promise<void> {
     const db = await openDb();
     const tx = db.transaction(SESSIONS, 'readwrite');
     await done(tx.objectStore(SESSIONS).delete(this.key(name)));
+  }
+
+  async loadShot(name: string): Promise<Blob | null> {
+    const db = await openDb();
+    const record = await done(
+      db.transaction(SESSIONS, 'readonly').objectStore(SESSIONS).get(this.key(name)) as
+        IDBRequest<SessionRecord | undefined>,
+    );
+    return record?.shot ?? null;
+  }
+
+  async saveShot(name: string, shot: Blob): Promise<void> {
+    await this.update(name, (record) => ({ ...record, shot }));
+  }
+
+  /** One record, changed and written back without a gap another writer
+   * could slip into. A session that isn't there yet starts empty. */
+  private async update(
+    name: string,
+    change: (record: SessionRecord) => SessionRecord,
+  ): Promise<void> {
+    const db = await openDb();
+    const tx = db.transaction(SESSIONS, 'readwrite');
+    const store = tx.objectStore(SESSIONS);
+    const found = await done(store.get(this.key(name)) as IDBRequest<SessionRecord | undefined>);
+    const base: SessionRecord = found ?? {
+      key: this.key(name),
+      slide: this.slide,
+      name,
+      modified: 0,
+      doc: { cytos_session: SESSION_FORMAT, name },
+    };
+    await done(store.put({ ...change(base), name, modified: Date.now() }));
   }
 }
 

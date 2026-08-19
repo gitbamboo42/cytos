@@ -69,6 +69,12 @@ export interface DesktopHost {
   writeSession(base: string, slug: string, text: string): Promise<void>;
 
   deleteSession(base: string, slug: string): Promise<void>;
+
+  /** `<slide>/sessions/<slug>.png` — the picker's thumbnail, the same file
+   * the Qt viewer writes beside a session. Null when there is none. */
+  readSessionShot(base: string, slug: string): Promise<Uint8Array | null>;
+
+  writeSessionShot(base: string, slug: string, bytes: Uint8Array): Promise<void>;
 }
 
 declare global {

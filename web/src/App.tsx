@@ -27,8 +27,8 @@ import {
   segmentsKey,
   rectFromCamera,
   slugify,
-  uniqueSessionName,
   DEFAULT_SESSION_NAME,
+  SESSION_FORMAT,
   type SavedCamera,
   type SavedSession,
   type SlideSettings,
@@ -42,9 +42,10 @@ import { readerFor } from './io/read';
 import { recentSlides, type RecentSlide } from './io/recents';
 import { sessionStoreFor, type SessionInfo } from './io/sessions';
 import { loadSlide, type LoadedSlide } from './io/slide';
-import { SlideViewer, type CameraView, type Recenter } from './render/scene';
+import { SlideViewer, type CameraView, type Recenter, type TakeShot } from './render/scene';
 import type { CustomColors } from './ui/color-picker';
 import { Panel } from './ui/panel';
+import { SessionPicker } from './ui/session-picker';
 import { Welcome } from './ui/welcome';
 
 /** How long after the last change the session is written. Long enough that
@@ -55,6 +56,13 @@ const SAVE_DELAY = 800;
 /** How often the camera is checked for having moved. Panning is not React
  * state (see `render/scene.tsx`), so nothing else would notice it. */
 const CAMERA_CHECK = 2000;
+
+/** How often the picker's thumbnail is taken, at most. Grabbing the frame
+ * reads pixels back off the GPU, which stalls the pipeline (Chromium says so
+ * out loud), and a session is written every couple of seconds while you pan
+ * — so this is what keeps a preview from costing a stall per pan. A picture
+ * a few seconds behind the view is one nobody can tell from a fresh one. */
+const SHOT_INTERVAL = 5000;
 
 function sameCamera(a: SavedCamera | null, b: SavedCamera | null): boolean {
   if (!a || !b) return a === b;
@@ -113,6 +121,9 @@ export default function App() {
   const store = useMemo(() => (slideUrl ? sessionStoreFor(slideUrl) : null), [slideUrl]);
   /** Names the other windows on this slide hold. */
   const [inUse, setInUse] = useState<string[]>([]);
+  /** True while the session picker is up — the slide is loaded but no
+   * session has been chosen, so nothing is drawn yet. */
+  const [picking, setPicking] = useState(false);
   const presence = useMemo(() => (slideUrl ? presenceFor(slideUrl) : null), [slideUrl]);
   /** The camera as last written, so panning can be noticed without React
    * hearing about every frame of it. */
@@ -130,6 +141,11 @@ export default function App() {
   // Where the camera is (written by the scene on every move, read by the
   // minimap on its own timer) and where the minimap has asked it to go.
   const camera = useRef<CameraView | null>(null);
+  /** The scene's way of handing back the frame on screen, for the session's
+   * thumbnail. Null until the viewer is up. */
+  const shot = useRef<TakeShot | null>(null);
+  /** When the last thumbnail was taken, so `SHOT_INTERVAL` can be kept. */
+  const shotAt = useRef(0);
   const [recenter, setRecenter] = useState<Recenter | null>(null);
   const recenterTo = (x: number, y: number) => {
     const view = camera.current;
@@ -178,6 +194,18 @@ export default function App() {
       // view state is not a reason to interrupt anyone. Same call as Qt's.
       console.warn(`could not save session "${nameRef.current}":`, err);
     }
+    // Then the picker's thumbnail, from the frame on screen — after the
+    // document, and never in its way: a preview is worth having, and worth
+    // nothing next to the view state itself. Qt writes the two together for
+    // the same reason (`save_session`).
+    try {
+      if (Date.now() - shotAt.current < SHOT_INTERVAL) return;
+      shotAt.current = Date.now();
+      const frame = await shot.current?.();
+      if (frame) await active.saveShot(nameRef.current, frame);
+    } catch (err) {
+      console.warn(`no thumbnail for session "${nameRef.current}":`, err);
+    }
   };
 
   /** Open a saved session onto an already-loaded slide. */
@@ -193,6 +221,7 @@ export default function App() {
         })
       : null;
     justApplied.current = true;
+    shotAt.current = 0;
     savedDoc.current = doc;
     savedCamera.current = doc?.camera ?? null;
     const applied = applySession(loaded.manifest, doc);
@@ -254,6 +283,7 @@ export default function App() {
     setError(null);
     setRecenter(null);
     setSessions([]);
+    setPicking(false);
     loadSlide(readerFor(slideUrl))
       .then(async (loaded) => {
         if (cancelled) return;
@@ -263,15 +293,15 @@ export default function App() {
         if (cancelled) return;
         setSessions(found);
         setInUse(taken);
-        // The most recently written session is the one you were last in —
-        // unless another window is already in it, in which case this window
-        // takes the next one down, or starts a fresh name. Two windows on
-        // one session would write the same file over each other, which is
-        // the rule Qt's picker enforces by greying names out.
-        const free = found.map((s) => s.name).filter((name) => !taken.includes(name));
-        const wanted = urlSession ?? free[0] ??
-          (taken.length ? uniqueSessionName([...taken, ...found.map((s) => s.name)]) : DEFAULT_SESSION_NAME);
-        await openSession(wanted, loaded);
+        // Which saved view to come back to is a question with more than one
+        // answer, so it is asked rather than guessed — the picker, with a
+        // thumbnail of each. Two exceptions, both Qt's: a session named
+        // outright (`?session=`) is an instruction, and a slide nobody has
+        // saved a view of has nothing to choose between, so it opens
+        // straight into "default".
+        if (urlSession) await openSession(urlSession, loaded);
+        else if (found.length === 0) await openSession(DEFAULT_SESSION_NAME, loaded);
+        else setPicking(true);
       })
       .catch((err) => {
         if (!cancelled) setError(String(err));
@@ -389,7 +419,50 @@ export default function App() {
       </div>
     );
   }
-  if (!slide || !settings) {
+  if (!slide) {
+    return <div style={{ padding: 24 }}>loading {slideUrl} …</div>;
+  }
+  if (picking) {
+    return (
+      <SessionPicker
+        slideName={slide.manifest.name}
+        sessions={sessions}
+        inUse={inUse}
+        loadShot={(name) => store?.loadShot(name) ?? Promise.resolve(null)}
+        onOpen={(name) => {
+          setPicking(false);
+          openSession(name, slide).then(refreshSessions);
+        }}
+        onCreate={async (name) => {
+          const active = storeRef.current;
+          if (!active) return;
+          // A name already taken is left exactly as it is — silently
+          // replacing someone's saved view is the one outcome worth ruling
+          // out — and the row is simply there to open.
+          if (!sessions.some((s) => slugify(s.name) === slugify(name))) {
+            await active
+              .save(name, { cytos_session: SESSION_FORMAT, name })
+              .catch((err) => console.warn(`could not create session "${name}":`, err));
+          }
+          refreshSessions();
+        }}
+        onDelete={(name) => {
+          storeRef.current
+            ?.remove(name)
+            .catch((err) => console.warn(`could not delete session "${name}":`, err))
+            .then(refreshSessions);
+        }}
+        onCancel={() => {
+          // Nothing chosen, so no window is bound to a session and there is
+          // nothing to show. Qt does not open the slide either.
+          setPicking(false);
+          setSlide(null);
+          setSlideUrl(null);
+        }}
+      />
+    );
+  }
+  if (!settings) {
     return <div style={{ padding: 24 }}>loading {slideUrl} …</div>;
   }
   return (
@@ -402,6 +475,7 @@ export default function App() {
         openingRect={openingRect}
         camera={camera}
         recenter={recenter}
+        shot={shot}
       />
       <Panel
         slide={slide}
@@ -411,54 +485,6 @@ export default function App() {
         custom={custom}
         camera={camera}
         onRecenter={recenterTo}
-        sessions={sessions}
-        sessionName={sessionName}
-        sessionsInUse={inUse}
-        onSwitchSession={(name) => {
-          // Leave the session you are in as you left it, then open the
-          // other one — switching is not a way to lose the last minute.
-          saveSession().then(() => openSession(name, slide).then(refreshSessions));
-        }}
-        onNewSession={(name) => {
-          // A name already taken opens that session instead of starting a
-          // new one over the top of it: two sessions cannot share a file
-          // (the slug is the filename, as in Qt), and silently replacing
-          // someone's saved view is the one outcome worth ruling out.
-          if (sessions.some((s) => slugify(s.name) === slugify(name))) {
-            saveSession().then(() => openSession(name, slide).then(refreshSessions));
-            return;
-          }
-          saveSession().then(() => {
-            // A new session is a fresh view of the slide, not a copy of this
-            // one: slide defaults, fitted camera, no custom colours. Same as
-            // the Qt picker's New.
-            justApplied.current = true;
-            savedDoc.current = null;
-            savedCamera.current = null;
-            setSettings(defaultSettings(slide.manifest));
-            setCustomColors([]);
-            setSessionName(name);
-            setRecenter(null);
-            setOpeningRect(null);
-            // Written straight away, so it shows up in the list before it
-            // has been touched.
-            nameRef.current = name;
-            saveSession().then(refreshSessions);
-          });
-        }}
-        onDeleteSession={(name) => {
-          const active = storeRef.current;
-          if (!active) return;
-          active
-            .remove(name)
-            .then(() => active.list())
-            .then((rest) => {
-              setSessions(rest);
-              const next = rest.find((s) => s.name !== name);
-              return openSession(next?.name ?? DEFAULT_SESSION_NAME, slide);
-            })
-            .catch((err) => console.warn(`could not delete session "${name}":`, err));
-        }}
         onChange={(key, patch) =>
           setSettings((prev) =>
             prev

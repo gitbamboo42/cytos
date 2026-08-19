@@ -51,4 +51,9 @@ contextBridge.exposeInMainWorld('cytos', {
     ipcRenderer.invoke('cytos:sessions:write', base, slug, text),
 
   deleteSession: (base, slug) => ipcRenderer.invoke('cytos:sessions:delete', base, slug),
+
+  readSessionShot: (base, slug) => ipcRenderer.invoke('cytos:sessions:read-shot', base, slug),
+
+  writeSessionShot: (base, slug, bytes) =>
+    ipcRenderer.invoke('cytos:sessions:write-shot', base, slug, bytes),
 });
