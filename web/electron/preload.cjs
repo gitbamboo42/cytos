@@ -27,6 +27,14 @@ contextBridge.exposeInMainWorld('cytos', {
     ipcRenderer.on('cytos:reset-settings', () => callback());
   },
 
+  recentSlides: () => ipcRenderer.invoke('cytos:recent:list'),
+
+  openRecent: (slide) => ipcRenderer.invoke('cytos:recent:open', slide),
+
+  forgetRecent: (slide) => ipcRenderer.invoke('cytos:recent:forget', slide),
+
+  clearRecent: () => ipcRenderer.invoke('cytos:recent:clear'),
+
   openedSession: (name) => ipcRenderer.invoke('cytos:session-open', name),
 
   sessionsInUse: () => ipcRenderer.invoke('cytos:sessions-in-use'),

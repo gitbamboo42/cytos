@@ -379,3 +379,9 @@
 .dd-item.off:hover {
   background: none;
 }
+
+/* Welcome-screen recents: no chrome until the pointer is on one. */
+.welcome-recent:hover {
+  background: #202024;
+  color: #e8e8e8;
+}

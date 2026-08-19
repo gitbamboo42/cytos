@@ -203,6 +203,13 @@ would overwrite the first. That rule is why the shell has windows at all
 (File ▸ New Window) and why it takes a single-instance lock — it is only
 enforceable among windows one process can see, exactly as in Qt.
 
+Recent slides are the other thing that belongs to no slide, so the shell
+keeps them in the app's own data directory, in the same `recent_slides.json`
+Qt writes — on macOS and Windows that is the same path, so one list serves
+both viewers; on Linux it is not (Electron's userData is `~/.config/cytos`,
+Qt's AppDataLocation `~/.local/share/cytos`), and they keep a list each. A
+tab keeps its own, in the IndexedDB its sessions already use.
+
 Two traps. A saved camera is a world-µm rectangle, and the fit to a zoom
 belongs in `render/scene.tsx`: at first paint the canvas is not yet the size
 it will be a frame later, and fitting to that momentary size opened restored

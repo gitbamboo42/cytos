@@ -34,6 +34,18 @@ export interface DesktopHost {
   /** View ▸ Reset to Slide Defaults. */
   onResetSettings(callback: () => void): void;
 
+  /** Slides opened before, most recent first, skipping any that are not
+   * there right now. The shell owns this list — its File ▸ Open Recent menu
+   * is built from the same file. */
+  recentSlides(): Promise<string[]>;
+
+  /** Open one of them in this window. */
+  openRecent(slide: string): Promise<void>;
+
+  forgetRecent(slide: string): Promise<void>;
+
+  clearRecent(): Promise<void>;
+
   /** Say which session this window now holds, and get back the ones its
    * siblings hold. One window, one session — as in Qt, because a session is
    * one file and the second writer would overwrite the first. */

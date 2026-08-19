@@ -15,6 +15,7 @@
  */
 
 import { slugify, type SavedSession, SESSION_FORMAT } from '../core/session';
+import { done, openDb, SESSIONS } from './db';
 import { desktopHost } from './host';
 
 export interface SessionInfo {
@@ -88,44 +89,16 @@ class FileSessionStore implements SessionStore {
 
 /**
  * Sessions in the browser's IndexedDB, one record per (slide, session).
- *
- * localStorage would have been shorter, but it is synchronous, shared with
- * everything else on the origin and capped at a few MB — a gene selection of
- * a few thousand ids is already a real fraction of that. IndexedDB is
- * per-origin too, so a session does not follow you to another machine; that
- * is what export and, one day, a server store are for.
+ * Per-origin, so a session does not follow you to another machine; that is
+ * what export and, one day, a server store are for. The database itself is
+ * `io/db.ts`, shared with the recent-slides list.
  */
-const DB_NAME = 'cytos';
-const DB_VERSION = 1;
-const STORE = 'sessions';
-
 interface SessionRecord {
   key: string; // slide + "\n" + slug — the primary key
   slide: string;
   name: string;
   modified: number;
   doc: SavedSession;
-}
-
-function openDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains(STORE)) {
-        db.createObjectStore(STORE, { keyPath: 'key' }).createIndex('slide', 'slide');
-      }
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-
-function done<T>(request: IDBRequest<T>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
 }
 
 class BrowserSessionStore implements SessionStore {
@@ -137,7 +110,7 @@ class BrowserSessionStore implements SessionStore {
 
   private async records(): Promise<SessionRecord[]> {
     const db = await openDb();
-    const index = db.transaction(STORE, 'readonly').objectStore(STORE).index('slide');
+    const index = db.transaction(SESSIONS, 'readonly').objectStore(SESSIONS).index('slide');
     return done(index.getAll(IDBKeyRange.only(this.slide)) as IDBRequest<SessionRecord[]>);
   }
 
@@ -151,7 +124,7 @@ class BrowserSessionStore implements SessionStore {
   async load(name: string): Promise<SavedSession | null> {
     const db = await openDb();
     const record = await done(
-      db.transaction(STORE, 'readonly').objectStore(STORE).get(this.key(name)) as
+      db.transaction(SESSIONS, 'readonly').objectStore(SESSIONS).get(this.key(name)) as
         IDBRequest<SessionRecord | undefined>,
     );
     if (!record) return null;
@@ -169,14 +142,14 @@ class BrowserSessionStore implements SessionStore {
       modified: Date.now(),
       doc,
     };
-    const tx = db.transaction(STORE, 'readwrite');
-    await done(tx.objectStore(STORE).put(record));
+    const tx = db.transaction(SESSIONS, 'readwrite');
+    await done(tx.objectStore(SESSIONS).put(record));
   }
 
   async remove(name: string): Promise<void> {
     const db = await openDb();
-    const tx = db.transaction(STORE, 'readwrite');
-    await done(tx.objectStore(STORE).delete(this.key(name)));
+    const tx = db.transaction(SESSIONS, 'readwrite');
+    await done(tx.objectStore(SESSIONS).delete(this.key(name)));
   }
 }
 

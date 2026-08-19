@@ -39,6 +39,7 @@ import { loadGenes, type GeneTable } from './io/points';
 import { desktopHost } from './io/host';
 import { presenceFor } from './io/presence';
 import { readerFor } from './io/read';
+import { recentSlides, type RecentSlide } from './io/recents';
 import { sessionStoreFor, type SessionInfo } from './io/sessions';
 import { loadSlide, type LoadedSlide } from './io/slide';
 import { SlideViewer, type CameraView, type Recenter } from './render/scene';
@@ -84,6 +85,10 @@ export default function App() {
     () => params.get('slide')?.replace(/\/+$/, '') ?? null,
   );
   const [slide, setSlide] = useState<LoadedSlide | null>(null);
+  // Slides opened before. The shell keeps the list (its Open Recent menu is
+  // built from the same file); a tab keeps its own.
+  const recents = useMemo(() => recentSlides(), []);
+  const [recentList, setRecentList] = useState<RecentSlide[]>([]);
   const [settings, setSettings] = useState<SlideSettings | null>(null);
   const [features, setFeatures] = useState<Record<string, FeatureTable | null>>({});
   const [genes, setGenes] = useState<Record<string, GeneTable | null>>({});
@@ -225,6 +230,10 @@ export default function App() {
   }, [host]);
 
   useEffect(() => {
+    recents.list().then(setRecentList).catch(() => {});
+  }, [recents, slideUrl]);
+
+  useEffect(() => {
     if (!presence) return;
     presence.onChange((names) => {
       setInUse(names);
@@ -266,7 +275,12 @@ export default function App() {
       })
       .catch((err) => {
         if (!cancelled) setError(String(err));
+        // A slide that no longer opens stops being offered. Missing ones the
+        // shell simply skips (an unmounted drive is not gone); this is for
+        // the one that answered and could not be read.
+        recents.forget(slideUrl);
       });
+    recents.remember(slideUrl).catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -345,7 +359,20 @@ export default function App() {
     };
   }, [slide, slideUrl]);
 
-  if (!slideUrl) return <Welcome desktop={Boolean(host)} />;
+  if (!slideUrl) {
+    return (
+      <Welcome
+        desktop={Boolean(host)}
+        recents={recentList}
+        onOpen={(id) => {
+          // In the shell the main process opens it — it owns the window's
+          // slide and the read allow-list. In a tab this is just the URL.
+          if (host) host.openRecent(id);
+          else setSlideUrl(id);
+        }}
+      />
+    );
+  }
   if (error) {
     return (
       <div style={{ padding: 24 }}>

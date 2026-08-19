@@ -18,6 +18,7 @@
 
 import { app, BrowserWindow, Menu, dialog, ipcMain } from 'electron';
 import { mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -55,6 +56,75 @@ if (!app.requestSingleInstanceLock()) {
  * slide it was given, not the rest of the disk.
  */
 const allowed = new Set();
+
+/**
+ * Recently opened slides — the one thing cytos remembers that belongs to no
+ * slide, so it lives in the app's own data directory rather than in any of
+ * them. The twin of `src/cytos/ui/recent.py`, down to the rules: entries are
+ * resolved so one slide is one entry, missing ones are kept in the file and
+ * skipped only where they are shown (a slide on an unmounted drive is not
+ * gone), and the write is a plain one because a single instance owns it — a
+ * half-written file merely empties the menu until the next open.
+ */
+const MAX_RECENT = 10;
+let recent = [];
+
+function recentStore() {
+  // The same file, same name, same JSON as Qt's — `app.setName('cytos')`
+  // puts Electron's userData exactly where QStandardPaths puts its
+  // AppDataLocation, so the two viewers share one list of recent slides
+  // rather than each keeping half of it.
+  return path.join(app.getPath('userData'), 'recent_slides.json');
+}
+
+async function loadRecent() {
+  try {
+    const parsed = JSON.parse(await readFile(recentStore(), 'utf8'));
+    recent = Array.isArray(parsed) ? parsed.filter((p) => typeof p === 'string') : [];
+  } catch {
+    recent = []; // no file yet, or an unreadable one: the next open rewrites it whole
+  }
+}
+
+async function writeRecent() {
+  try {
+    await mkdir(path.dirname(recentStore()), { recursive: true });
+    await writeFile(recentStore(), JSON.stringify(recent, null, 2) + '\n');
+  } catch (err) {
+    console.warn(`could not save the recent-slides list: ${err.message}`);
+  }
+}
+
+function rememberSlide(full) {
+  recent = [full, ...recent.filter((p) => p !== full)].slice(0, MAX_RECENT);
+  writeRecent();
+  buildMenu(); // the File menu is built from this list
+}
+
+/** Those that are there right now — what the menu and the welcome screen
+ * show. The rest stay in the file. */
+function presentRecent() {
+  return recent.filter((p) => existsSync(p));
+}
+
+ipcMain.handle('cytos:recent:list', () => presentRecent());
+
+ipcMain.handle('cytos:recent:open', (event, slide) => {
+  const found = stateOf(event.sender);
+  openSlide(slide, found?.window);
+});
+
+ipcMain.handle('cytos:recent:forget', (_event, slide) => {
+  recent = recent.filter((p) => p !== path.resolve(slide));
+  writeRecent();
+  buildMenu();
+});
+
+ipcMain.handle('cytos:recent:clear', () => {
+  recent = [];
+  writeRecent();
+  buildMenu();
+});
 
 /**
  * Windows, and what each is looking at.
@@ -122,13 +192,24 @@ function insideAllowed(full) {
 function openSlide(dir, target) {
   const full = path.resolve(dir);
   allowed.add(full);
+  // The OS list too — it costs one call and fills the Dock icon's menu. Our
+  // own file stays the source of truth: it is cross-platform, and a `.cytos`
+  // slide is a directory, which is not what those lists are built for.
   app.addRecentDocument(full);
+  rememberSlide(full);
   const empty = target ?? [...windows].find(([, state]) => !state.slide)?.[0];
   if (!empty) {
     createWindow(full);
     return;
   }
   const state = windows.get(empty);
+  // The welcome window is small; a slide needs the room. Only grow one that
+  // is still at its welcome size, so a window someone has resized keeps it.
+  const [w, h] = empty.getSize();
+  if (!state.slide && w === WELCOME_SIZE.width && h === WELCOME_SIZE.height) {
+    empty.setSize(SLIDE_SIZE.width, SLIDE_SIZE.height, true);
+    empty.center();
+  }
   state.slide = full;
   state.session = null;
   retitle(empty);
@@ -323,6 +404,25 @@ function buildMenu() {
         { id: 'open-slide', label: 'Open Slide…', accelerator: 'CmdOrCtrl+O', click: promptOpenSlide },
         { id: 'new-window', label: 'New Window', accelerator: 'CmdOrCtrl+N', click: newWindow },
         {
+          label: 'Open Recent',
+          submenu: [
+            ...presentRecent().map((slide) => ({
+              label: path.basename(slide),
+              click: () => openSlide(slide),
+            })),
+            { type: 'separator' },
+            {
+              label: 'Clear Menu',
+              enabled: recent.length > 0,
+              click: () => {
+                recent = [];
+                writeRecent();
+                buildMenu();
+              },
+            },
+          ],
+        },
+        {
           label: 'Reset to Slide Defaults',
           click: () =>
             BrowserWindow.getFocusedWindow()?.webContents.send('cytos:reset-settings'),
@@ -359,10 +459,15 @@ function clipboardKeys(contents) {
   });
 }
 
+/** A window with a slide in it, and one with only the welcome screen. Qt
+ * sizes its two the same way (760x480 against 1300x950): a welcome screen
+ * holds a few lines, and opening it at slide size is mostly empty desk. */
+const SLIDE_SIZE = { width: 1400, height: 900 };
+const WELCOME_SIZE = { width: 760, height: 520 };
+
 function createWindow(slide = null) {
   const win = new BrowserWindow({
-    width: 1400,
-    height: 900,
+    ...(slide ? SLIDE_SIZE : WELCOME_SIZE),
     backgroundColor: '#000',
     title: 'cytos',
     webPreferences: {
@@ -404,9 +509,13 @@ app.on('open-file', (event, filePath) => {
   openSlide(filePath);
 });
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   const initial = slideFromArgv();
-  if (initial) allowed.add(initial);
+  await loadRecent();
+  if (initial) {
+    allowed.add(initial);
+    rememberSlide(initial);
+  }
   buildMenu();
   createWindow(initial);
 
