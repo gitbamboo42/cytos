@@ -24,11 +24,32 @@ import type { ReadRange } from './read';
 // feature_names() in src/cytos/core/polygons.py.
 const NON_MEASUREMENT = new Set(['id', 'cell_id', 'x_centroid', 'y_centroid']);
 
+/** The key a category is known by, everywhere: a category number as a
+ * string, or "unassigned" for cells with no value. JSON-safe, because the
+ * session stores colours and hidden categories under exactly these keys —
+ * same form as `_category_mask` in `src/cytos/render/polygons.py`. */
+export const UNASSIGNED_KEY = 'unassigned';
+
+export function categoryKey(value: number): string {
+  return Number.isNaN(value) ? UNASSIGNED_KEY : String(Math.trunc(value));
+}
+
+/** One category of a categorical feature, and how many cells are in it. */
+export interface Category {
+  key: string;
+  count: number;
+}
+
 export interface Feature {
   name: string;
   categorical: boolean;
   /** Value per dense cell id; NaN = no value ("unassigned"). */
   values: Float64Array;
+  /** Every category present, ascending, with "unassigned" last if there is
+   * any — what the legend lists, and the same order (and counts) as
+   * `_categorical_info` in `src/cytos/ui/main_window.py`. Empty for a
+   * measurement. */
+  categories: Category[];
   /** Ramp domain: the 2nd/98th percentile of real values (min/max when the
    * percentiles collapse) — same robust range as `feature_colors` in
    * `src/cytos/render/polygons.py`, so a heavy-tailed feature like
@@ -47,6 +68,23 @@ function robustDomain(values: Float64Array): [number, number] {
     hi = finite[finite.length - 1];
   }
   return hi > lo ? [lo, hi] : [lo, lo + 1];
+}
+
+function categoryCounts(values: Float64Array): Category[] {
+  const counts = new Map<number, number>();
+  let unassigned = 0;
+  for (const v of values) {
+    if (Number.isNaN(v)) unassigned += 1;
+    else {
+      const c = Math.trunc(v);
+      counts.set(c, (counts.get(c) ?? 0) + 1);
+    }
+  }
+  const found = [...counts.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([value, count]) => ({ key: String(value), count }));
+  if (unassigned) found.push({ key: UNASSIGNED_KEY, count: unassigned });
+  return found;
 }
 
 export class FeatureTable {
@@ -100,6 +138,7 @@ export async function loadFeatures(
       name: field.name,
       categorical,
       values,
+      categories: categorical ? categoryCounts(values) : [],
       domain: robustDomain(values),
     });
   }

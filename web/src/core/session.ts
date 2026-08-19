@@ -8,6 +8,7 @@
  * command — is a plain merge, not a translation.
  */
 
+import { DEFAULT_CATEGORY_PALETTE } from './colormaps';
 import { imageLayers, pointLayers, segmentLayers, type SlideManifest } from './manifest';
 
 export interface ImageSettings {
@@ -22,7 +23,16 @@ export interface SegmentSettings {
   show_fill: boolean;
   fill_opacity: number;
   color_by: string | null;
+  /** The ramp, for a measurement; a "#rrggbb" or ramp name for flat colour.
+   * A categorical feature ignores it and takes `palette` instead. */
   colormap: string;
+  /** Qualitative palette for a categorical `color_by`. */
+  palette: string;
+  /** feature -> {category key -> "#rrggbb"} and feature -> hidden keys, both
+   * kept per feature so tweaks to "cluster" survive a look at another
+   * column. A category key is "7", or "unassigned" (`io/features.ts`). */
+  category_colors: Record<string, Record<string, string>>;
+  hidden_categories: Record<string, string[]>;
 }
 
 /** Points, in the same vocabulary `collect_session` writes: `color_mode` is
@@ -100,6 +110,9 @@ export function defaultSettings(manifest: SlideManifest): SlideSettings {
       fill_opacity: layer.fill_opacity ?? 0.35,
       color_by: layer.color_by ?? null,
       colormap: layer.colormap ?? 'viridis',
+      palette: layer.palette ?? DEFAULT_CATEGORY_PALETTE,
+      category_colors: layer.category_colors ?? {},
+      hidden_categories: layer.hidden_categories ?? {},
     };
   }
   for (const layer of pointLayers(manifest)) {
@@ -149,10 +162,10 @@ export interface ViewRect {
  * A saved session, as it sits on disk — the same document
  * `collect_session` writes in `src/cytos/ui/main_window.py`.
  *
- * Fields this viewer does not understand (Qt's `window` geometry blob, a
- * segment row's `category_colors`) are carried through untouched: opening
- * someone's session in the web viewer and saving it must not quietly throw
- * away the half only the Qt viewer can show.
+ * Fields this viewer does not understand (Qt's `window` geometry blob) are
+ * carried through untouched: opening someone's session in the web viewer and
+ * saving it must not quietly throw away the half only the Qt viewer can
+ * show.
  */
 export interface SavedSession {
   cytos_session: number;

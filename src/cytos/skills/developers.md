@@ -234,9 +234,22 @@ tab keeps its own, in the IndexedDB its sessions already use.
 Two traps. A saved camera is a world-µm rectangle, and the fit to a zoom
 belongs in `render/scene.tsx`: at first paint the canvas is not yet the size
 it will be a frame later, and fitting to that momentary size opened restored
-views 2.4x too wide. And fields only Qt understands (its `window` blob, a
-segment row's `category_colors`) must ride through a save untouched, or
-opening someone's session here quietly throws half of it away.
+views 2.4x too wide. And fields only Qt understands (its `window` blob) must
+ride through a save untouched, or opening someone's session here quietly
+throws half of it away.
+
+A categorical feature — a clustering, not a measurement — is coloured by a
+qualitative palette and listed in a legend that doubles as a control
+(`ui/legend.tsx`, the twin of the legend in Qt's `ui/segment_panel.py`): the
+swatch opens a colour picker, the checkbox hides those cells, the count says
+how many there are. Two things that look like details and are not. Colour
+comes from the *category number*, so a category keeps its colour across
+layers, slides and sessions until someone pins one. And hiding is done by
+alpha 0 in the colour, not by dropping geometry: a tile is one buffer, so the
+colour is the only per-cell switch there is — which is also why the per-cell
+table is built once per settings change (`categoryTable` in
+`render/segments.ts`) rather than per tile, where a layer's 140k cells would
+be rebuilt for each of the visible tiles.
 
 Not built yet: annotations (selections, which will be documents of their own
 rather than part of a session — Reset must never destroy authored work) and
@@ -257,6 +270,8 @@ side, change the other in the same commit.**
 | channel hues, color presets | `render/image.py` | `core/colormaps.ts` |
 | non-measurement columns | `feature_names`, `core/polygons.py` | `io/features.ts` |
 | categorical marker | `core/polygons.py` | `io/features.ts` |
+| category keys, counts, order | `_categorical_info`, `ui/main_window.py` | `io/features.ts` |
+| category palettes, unassigned grey | `render/polygons.py`, `render/points.py` | `core/colormaps.ts` |
 | feature ramp domain (2nd/98th pct) | `render/polygons.py` | `io/features.ts` |
 | autocontrast (1st/99.5th pct) | `prep/slide.py` | `render/image.ts` |
 

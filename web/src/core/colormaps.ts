@@ -87,8 +87,65 @@ export const TAB20: RGB[] = [
   [188, 189, 34], [219, 219, 141], [23, 190, 207], [158, 218, 229],
 ];
 
-/** Cells with no value for the feature ("unassigned") draw dim, not absent. */
-export const UNASSIGNED_COLOR: RGB = [80, 80, 80];
+/** The qualitative palettes a categorical feature can take, in the Qt
+ * viewer's order — `CURATED_PALETTES` in `src/cytos/render/points.py`, whose
+ * colours come from plotlet. A ramp would be wrong here: its order says
+ * cluster 7 is "more" than cluster 2, when the numbers are only labels. */
+export const CATEGORY_PALETTES: Record<string, RGB[]> = {
+  tab10: TAB10,
+  colorblind: [
+    [0, 0, 0], [230, 159, 0], [86, 180, 233], [0, 158, 115],
+    [240, 228, 66], [0, 114, 178], [213, 94, 0], [204, 121, 167],
+  ],
+  Set1: [
+    [228, 26, 28], [55, 126, 184], [77, 175, 74], [152, 78, 163], [255, 127, 0],
+    [255, 255, 51], [166, 86, 40], [247, 129, 191], [153, 153, 153],
+  ],
+  Dark2: [
+    [27, 158, 119], [217, 95, 2], [117, 112, 179], [231, 41, 138],
+    [102, 166, 30], [230, 171, 2], [166, 118, 29], [102, 102, 102],
+  ],
+  Set2: [
+    [102, 194, 165], [252, 141, 98], [141, 160, 203], [231, 138, 195],
+    [166, 216, 84], [255, 217, 47], [229, 196, 148], [179, 179, 179],
+  ],
+  tab20: TAB20,
+  Paired: [
+    [166, 206, 227], [31, 120, 180], [178, 223, 138], [51, 160, 44],
+    [251, 154, 153], [227, 26, 28], [253, 191, 111], [255, 127, 0],
+    [202, 178, 214], [106, 61, 154], [255, 255, 153], [177, 89, 40],
+  ],
+  Set3: [
+    [141, 211, 199], [255, 255, 179], [190, 186, 218], [251, 128, 114],
+    [128, 177, 211], [253, 180, 98], [179, 222, 105], [252, 205, 229],
+    [217, 217, 217], [188, 128, 189], [204, 235, 197], [255, 237, 111],
+  ],
+};
+
+/** Offered in this order, so the picker reads the same top to bottom in both
+ * viewers. */
+export const PALETTE_NAMES = Object.keys(CATEGORY_PALETTES);
+
+/** Clusterings regularly run past ten categories, and here the palette only
+ * has to separate neighbours — same default as `DEFAULT_CATEGORY_PALETTE` in
+ * `src/cytos/render/polygons.py`. */
+export const DEFAULT_CATEGORY_PALETTE = 'tab20';
+
+export function paletteColors(name: string): RGB[] {
+  return CATEGORY_PALETTES[name] ?? TAB20;
+}
+
+/** A category's colour before anyone pins one: straight from the category
+ * number, so a category keeps its colour across layers, slides and sessions.
+ * `src/cytos/render/polygons.py` colours them the same way. */
+export function categoryColor(value: number, palette: string): RGB {
+  const colors = paletteColors(palette);
+  return colors[((value % colors.length) + colors.length) % colors.length | 0];
+}
+
+/** Cells with no value for the feature ("unassigned") draw dim, not absent —
+ * the same grey as `_UNASSIGNED_RGBA` in `src/cytos/render/polygons.py`. */
+export const UNASSIGNED_COLOR: RGB = [115, 115, 115];
 
 /** The balanced hues behind the manifest's named channel colors — same
  * values as `_COMPOSITE_HUES` in `src/cytos/render/image.py` (pure #00ff00

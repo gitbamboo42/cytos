@@ -6,7 +6,7 @@
 
 import { useState } from 'react';
 
-import { RAMP_NAMES } from '../core/colormaps';
+import { PALETTE_NAMES, RAMP_NAMES } from '../core/colormaps';
 import type { ImageLayerSpec, PointLayerSpec, SegmentLayerSpec } from '../core/manifest';
 import type { ImageSettings, PointSettings, SegmentSettings } from '../core/session';
 import type { FeatureTable } from '../io/features';
@@ -15,6 +15,7 @@ import type { LoadedSlide } from '../io/slide';
 import { autocontrast } from '../render/image';
 import { ColorSwatch, type CustomColors } from './color-picker';
 import { GenePicker } from './gene-picker';
+import { CategoryLegend } from './legend';
 import { ClimControl, Dropdown, styles } from './controls';
 
 export function ImageRow({
@@ -155,7 +156,24 @@ export function SegmentRow({
             onChange={(colormap) => onChange({ colormap })}
           />
         )}
+        {coloring?.categorical && (
+          // A qualitative palette, not a ramp: a ramp's order would say
+          // cluster 7 is "more" than cluster 2. Same choice as Qt's row.
+          <Dropdown
+            value={settings.palette}
+            options={PALETTE_NAMES}
+            onChange={(palette) => onChange({ palette })}
+          />
+        )}
       </div>
+      {coloring?.categorical && (
+        <CategoryLegend
+          feature={coloring}
+          settings={settings}
+          custom={custom}
+          onChange={onChange}
+        />
+      )}
     </div>
   );
 }

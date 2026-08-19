@@ -33,6 +33,15 @@ export interface SegmentLayerSpec {
   visible?: boolean;
   color_by?: string | null;
   colormap?: string;
+  /** Qualitative palette for a categorical `color_by`. */
+  palette?: string;
+  /** feature -> {category key -> "#rrggbb"}: colours picked by hand, on top
+   * of the palette. feature -> [category key, ...] for the ones drawn not at
+   * all. Both are session state — the importer writes neither, so a slide's
+   * defaults are empty. Same fields as `SegmentLayer` in
+   * `src/cytos/core/slide.py`. */
+  category_colors?: Record<string, Record<string, string>>;
+  hidden_categories?: Record<string, string[]>;
 }
 
 export interface PointLayerSpec {

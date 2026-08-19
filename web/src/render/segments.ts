@@ -11,10 +11,16 @@ import { LineLayer, SolidPolygonLayer } from '@deck.gl/layers';
 import type { PickingInfo } from '@deck.gl/core';
 import { Matrix4 } from '@math.gl/core';
 
-import { colorValueRgb, rampLut, TAB20, UNASSIGNED_COLOR } from '../core/colormaps';
+import {
+  categoryColor,
+  colorValueRgb,
+  hexToRgb,
+  rampLut,
+  UNASSIGNED_COLOR,
+} from '../core/colormaps';
 import { tileWorldSize } from '../core/manifest';
 import type { SegmentSettings } from '../core/session';
-import type { Feature, FeatureTable } from '../io/features';
+import { categoryKey, type Feature, type FeatureTable } from '../io/features';
 import type { SegmentTileSource } from '../io/segments';
 import type { LoadedSlide } from '../io/slide';
 
@@ -77,17 +83,72 @@ function ringSegments(positions: Float32Array, startIndices: Uint32Array, cellId
   return { source, target, segmentCellIds };
 }
 
+/**
+ * One RGBA per *cell* for a categorical feature — the web twin of
+ * `category_colors` in `src/cytos/render/polygons.py`: the palette by
+ * category number, the session's own colours on top, and alpha 0 for a
+ * category that is hidden (for one monolithic polygon tile the colour is the
+ * only per-cell hiding there is).
+ *
+ * Per cell, not per vertex, because a tile has far more vertices than cells
+ * and every tile of the layer reads the same table. The alpha byte here is
+ * only a flag — 0 hidden, 255 shown — and the fill's or outline's own alpha
+ * is applied when the vertex colours are built.
+ */
+function categoryCellColors(
+  feature: Feature,
+  palette: string,
+  overrides: Record<string, string>,
+  hidden: string[],
+): Uint8Array {
+  const n = feature.values.length;
+  const out = new Uint8Array(n * 4);
+  const pinned = new Map<string, [number, number, number]>();
+  for (const [key, hex] of Object.entries(overrides)) {
+    const rgb = hexToRgb(hex);
+    if (rgb) pinned.set(key, rgb);
+  }
+  const off = new Set(hidden);
+  for (let cell = 0; cell < n; cell++) {
+    const v = feature.values[cell];
+    const key = categoryKey(v);
+    const [r, g, b] =
+      pinned.get(key) ?? (Number.isNaN(v) ? UNASSIGNED_COLOR : categoryColor(v, palette));
+    const j = cell * 4;
+    out[j] = r;
+    out[j + 1] = g;
+    out[j + 2] = b;
+    out[j + 3] = off.has(key) ? 0 : 255;
+  }
+  return out;
+}
+
 /** Per-vertex RGBA from a per-cell feature: the tile's vertex_cell_id
  * column indexes the feature values directly (row i of features.parquet is
- * dense cell id i). NaN — a cell with no value — draws dim, not absent. */
+ * dense cell id i). NaN — a cell with no value — draws dim, not absent.
+ * `cells` is the categorical table above, when there is one. */
 function vertexColors(
   vertexCellIds: Uint32Array,
   feature: Feature,
   colormap: string,
   alpha: number,
+  cells: Uint8Array | null,
 ): Uint8Array {
   const n = vertexCellIds.length;
   const out = new Uint8Array(n * 4);
+  if (cells) {
+    for (let i = 0; i < n; i++) {
+      const c = vertexCellIds[i] * 4;
+      const j = i * 4;
+      out[j] = cells[c];
+      out[j + 1] = cells[c + 1];
+      out[j + 2] = cells[c + 2];
+      // The cell's byte says shown or hidden; the layer's alpha says how
+      // solid a shown one is.
+      out[j + 3] = cells[c + 3] ? alpha : 0;
+    }
+    return out;
+  }
   const lut = rampLut(colormap);
   const [lo, hi] = feature.domain;
   const scale = 255 / (hi - lo);
@@ -98,8 +159,6 @@ function vertexColors(
     let b: number;
     if (Number.isNaN(v)) {
       [r, g, b] = UNASSIGNED_COLOR;
-    } else if (feature.categorical) {
-      [r, g, b] = TAB20[((v % 20) + 20) % 20 | 0];
     } else {
       const q = Math.max(0, Math.min(255, Math.round((v - lo) * scale))) * 4;
       r = lut[q];
@@ -136,8 +195,9 @@ function colorizeTile(
   feature: Feature | undefined,
   colormap: string,
   fillAlpha: number,
+  category: CategoryTable | null,
 ): string {
-  const key = `${feature?.name ?? ''}|${feature?.categorical ?? ''}|${colormap}|${fillAlpha}`;
+  const key = `${feature?.name ?? ''}|${colormap}|${fillAlpha}|${category?.key ?? ''}`;
   if (colorState.get(tile) !== key) {
     const ids = tile.fill.vertexCellIds;
     // No feature = one flat color for every cell: a hex colormap value as
@@ -145,12 +205,13 @@ function colorizeTile(
     // src/cytos/render/polygons.py, so flat color needs no second field.
     const flat = colorValueRgb(colormap);
     const segIds = tile.outline.segmentCellIds;
+    const cells = category?.colors ?? null;
     const fill = feature
-      ? vertexColors(ids, feature, colormap, fillAlpha)
+      ? vertexColors(ids, feature, colormap, fillAlpha, cells)
       : solidColors(ids.length, flat, fillAlpha);
     // LineLayer colors are per segment (per instance), not per vertex.
     const line = feature
-      ? vertexColors(segIds, feature, colormap, OUTLINE_ALPHA)
+      ? vertexColors(segIds, feature, colormap, OUTLINE_ALPHA, cells)
       : solidColors(segIds.length, flat, OUTLINE_ALPHA);
     // `normalized: true` says these uint8 channels are 0-255 fractions of 1,
     // matching the shader attribute's unorm8 type — without the flag deck
@@ -160,6 +221,44 @@ function colorizeTile(
     colorState.set(tile, key);
   }
   return key;
+}
+
+interface CategoryTable {
+  /** What the colouring depends on — the cache key, and the value deck's
+   * updateTriggers watch. */
+  key: string;
+  colors: Uint8Array;
+}
+
+/** The per-cell categorical table for each layer, so it is built when the
+ * colouring changes and not on every React render — one pass over 140k cells
+ * is cheap, but not sixty times a second. */
+const categoryTables = new Map<string, CategoryTable>();
+
+function categoryTable(
+  layerId: string,
+  feature: Feature,
+  settings: SegmentSettings,
+): CategoryTable {
+  const overrides = settings.category_colors[feature.name] ?? {};
+  const hidden = settings.hidden_categories[feature.name] ?? [];
+  const key = [
+    feature.name,
+    settings.palette,
+    Object.entries(overrides)
+      .map(([k, v]) => `${k}:${v}`)
+      .sort()
+      .join(','),
+    [...hidden].sort().join(','),
+  ].join('|');
+  const cached = categoryTables.get(layerId);
+  if (cached?.key === key) return cached;
+  const table = {
+    key,
+    colors: categoryCellColors(feature, settings.palette, overrides, hidden),
+  };
+  categoryTables.set(layerId, table);
+  return table;
 }
 
 export function segmentTileLayer(
@@ -175,6 +274,7 @@ export function segmentTileLayer(
   const worldToPixels = new Matrix4().scale([1 / s, 1 / s, 1]);
   const fillAlpha = settings.show_fill ? Math.round(255 * settings.fill_opacity) : 0;
   const feature = settings.color_by ? features?.get(settings.color_by) : undefined;
+  const category = feature?.categorical ? categoryTable(spec.id, feature, settings) : null;
 
   return new TileLayer<DeckSegmentTile | null>({
     id: `segments-${spec.id}`,
@@ -195,6 +295,7 @@ export function segmentTileLayer(
         settings.show_outline,
         settings.colormap,
         feature?.name ?? null,
+        category?.key ?? '',
       ],
     },
     // The deck-ready binary objects are built HERE, once per tile, so their
@@ -227,7 +328,7 @@ export function segmentTileLayer(
     renderSubLayers: (props) => {
       const tile = props.data;
       if (!tile) return null;
-      const colorKey = colorizeTile(tile, feature, settings.colormap, fillAlpha);
+      const colorKey = colorizeTile(tile, feature, settings.colormap, fillAlpha, category);
       return [
         new SolidPolygonLayer({
           id: `${props.id}-fill`,
