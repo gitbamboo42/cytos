@@ -1,6 +1,7 @@
 """The `.cytos` slide: one directory holding every layer of one dataset, plus
-a plain-JSON manifest that says what's in it. `cytos-viewer` opens a slide and
-nothing else; `cytos-import` (see `cytos.prep.slide`) is what builds one.
+a plain-JSON manifest that says what's in it. The viewer (the app in `web/`)
+opens a slide and nothing else; `cytos-import` (see `cytos.prep.slide`) is
+what builds one.
 
 Why a directory with a JSON manifest, rather than one big zarr hierarchy:
 nothing at the top level is then tied to any storage format. The root is an
@@ -65,9 +66,9 @@ TILES_ZIP_FORMAT = "zarr-zip-tiles-v1"
 IMAGE_FORMAT = "ome-ngff-0.5"
 IMAGE_ZIP_FORMAT = "ome-ngff-0.5-zip"
 
-# Black->hue ramps registered by `cytos.render.image`, in the order channels get
-# assigned one when the importer isn't told otherwise. Lives here, not in
-# `render`, because `prep` needs it too and prep must not import render.
+# Black->hue ramps, in the order channels get assigned one when the importer
+# isn't told otherwise. The hues themselves are the viewer's
+# (`web/src/core/colormaps.ts`); what the manifest carries is these names.
 DEFAULT_CHANNEL_COLORMAPS = ("blue", "green", "red", "cyan", "magenta", "yellow")
 
 
@@ -105,7 +106,7 @@ class SegmentLayer:
     show_fill: bool = False
     fill_opacity: float = 0.35
     visible: bool = True
-    # Presentation of categorical features (see cytos.render.polygons):
+    # Presentation of categorical features (see the viewer's legend):
     # the qualitative palette, per-category colour overrides, and hidden
     # categories -- both keyed feature -> category, where a category key is
     # a JSON-safe string ("7", or "unassigned" for cells absent from the

@@ -2,11 +2,11 @@
 `.md` files in this directory; this module is just the code that serves
 them, living with its data.
 
-`cytos-ctl skill` prints the users guide (and `cytos-ctl skill developer`
-the developer one) so an AI assistant can read it straight from the
-installed package — no repo clone, no copy-paste, and it can't drift from
-the code it ships with. The same text backs the MCP server's `usage_guide`
-tool.
+They ship inside the package so an AI assistant can read them straight from
+an install — no repo clone, no copy-paste, and no drifting from the code
+they ship with. `guide_text` is how a command would serve them; the one that
+did (`cytos-ctl skill`) was removed with the rest of that surface, so today
+the files are simply read.
 """
 
 from pathlib import Path

@@ -1,6 +1,6 @@
 """Transcript-point data model: one (x, y) per detected transcript plus the
-gene it belongs to. Pure numpy/pyarrow -- no pygfx/GPU dependency, see
-`cytos.render.points` for that.
+gene it belongs to. Pure numpy/pyarrow, and no GPU: drawing is the viewer's
+job, in `web/src/render/points.ts`.
 
 The third primitive alongside the OME-Zarr image and the polygon set (see
 skills/developers.md). Where a polygon set is ragged (each cell has its own vertex run),

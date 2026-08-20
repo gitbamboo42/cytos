@@ -1,6 +1,6 @@
 """Cell segmentation polygon data model: ragged-array boundary geometry plus
-per-cell attributes. Pure numpy/pyarrow -- no pygfx/GPU dependency, see
-cytos.render for that.
+per-cell attributes. Pure numpy/pyarrow, and no GPU: drawing is the viewer's
+job, in `web/src/render/segments.ts`.
 
 Raw vertex coordinates are already in the same world space as
 cytos.core.image's PyramidLevel (world Y increasing downward, matching pixel
@@ -80,7 +80,7 @@ def _ring_areas(coords: np.ndarray, offsets: np.ndarray) -> np.ndarray:
 
 
 # Field metadata that marks a features column as categorical -- a palette,
-# not a ramp (see `cytos.render.polygons`). Metadata rather than Arrow's
+# not a ramp (the viewer's `io/features.ts` reads this). Metadata rather than Arrow's
 # dictionary type, because parquet treats dictionaries as an *encoding* and
 # hands the column back as plain integers, while the schema's field
 # metadata survives the round trip intact. Nothing anywhere matches on
@@ -218,9 +218,9 @@ def polygons_from_parquet(
 
 @dataclass
 class PolygonTile:
-    """One tile's geometry, as plain numpy. The renderer only ever sees this,
-    never the store it came out of -- which is what lets the tile format change
-    (`SegmentLayer.format`) without touching `cytos.render`."""
+    """One tile's geometry, as plain numpy. What a reader hands on, never the
+    store it came out of -- which is what lets the tile format change
+    (`SegmentLayer.format`) without touching anything that draws."""
 
     coords: np.ndarray  # (V, 2) float32, world space
     triangle_indices: np.ndarray  # (T*3,) uint32, local to this tile's coords

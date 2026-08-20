@@ -1,6 +1,6 @@
 """OME-Zarr pyramid data model: level metadata, level selection, and chunk-grid
-tiling math. Pure numpy — no pygfx/GPU dependency, see `cytos.render.image` for
-that.
+tiling math. Pure numpy and no GPU: drawing is the viewer's job, in
+`web/src/render/image.ts`.
 
 Reuses OME-Zarr's own chunk grid as the tile grid rather than inventing a
 second one.
@@ -35,10 +35,10 @@ class PyramidLevel:
         offset with no flip anywhere on the data path, and world bounds come
         out positive.
 
-        pygfx renders +y upward, so exactly one flip is still needed to put
-        row 0 at the top of the screen. It lives on the camera
-        (`camera.local.scale_y = -1`, see `cytos.ui.main_window`) -- one place,
-        in the view, where a display convention belongs.
+        Whether a flip is needed to put row 0 at the top of the screen is
+        the view's business, not the data's -- deck.gl's OrthographicView
+        already points y down and needs none. A display convention belongs
+        there, in one place, never on the data path.
         """
         h, w = self.shape
         sy, sx = self.scale

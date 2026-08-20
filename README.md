@@ -3,28 +3,28 @@
 A fast, read-only viewer for spatial biology data: cell segmentation polygons
 drawn over a large OME-Zarr morphology image.
 
-## Install
+Two halves, one format between them. The **viewer** is a desktop app (and the
+same page in a browser) built from `web/`. The **pip package** is the
+pipeline: it turns a source dataset into a `.cytos` slide and defines what
+that slide is. Nothing in the package draws anything.
+
+## Building slides
 
 ```
 pip install -e .
+cytos-import path/to/xenium_output --out sample.cytos
 ```
 
-## Usage
-
-```
-cytos-viewer
-```
-
-Convert a Xenium morphology OME-TIFF channel to OME-Zarr first, if needed:
+Convert a morphology OME-TIFF channel to OME-Zarr first, if needed:
 
 ```
 cytos-convert-ome-zarr path/to/morphology.ome.tif --channel 0 --out out.ome.zarr
 ```
 
-## Web viewer and desktop app
+## The viewer
 
-A second viewer lives in `web/` — the one the project is moving to. It is not
-part of the pip install and needs Node. From a checkout:
+The app lives in `web/`. It is not part of the pip install and needs Node.
+From a checkout:
 
 ```
 cd web
@@ -41,20 +41,12 @@ To run it as a plain web page instead, `npm run dev` serves the page and
 `python tools/serve_slides.py` serves the slides. Full notes, including how to
 screenshot either one, are in `src/cytos/skills/developers.md`.
 
-## Scripting the viewer, and AI assistants
+## AI assistants
 
-A running viewer can be driven from outside — open a slide, move the
-camera, change layer settings, screenshot the view. Tell your AI assistant
-to run `cytos-ctl skill` and follow it: the full operating guide ships
-inside the installed package, so it is always in reach and always current.
+The guides ship inside the package as plain markdown, in
+`src/cytos/skills/`: `users.md` for operating the viewer, `developers.md`
+for working on the code. Point your assistant at them.
 
-For AI clients that can't run shell commands (Claude Desktop, claude.ai),
-the same control is available as an MCP server, where snapshots come back
-as images the model sees directly:
-
-```
-pip install 'cytos[mcp]'
-claude mcp add cytos -- cytos-mcp        # or your client's MCP config
-```
-
-Either way the viewer itself must already be running.
+The web viewer is driven with Playwright — `web/shot.mjs` opens a page,
+clicks the real controls and screenshots the result, which is how a change
+gets checked without anyone refereeing pixels by hand.

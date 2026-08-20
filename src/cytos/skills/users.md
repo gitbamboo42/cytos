@@ -1,5 +1,13 @@
 # cytos users guide
 
+> **Out of date — the viewer this describes no longer exists.** The Qt
+> desktop app was removed, and with it `cytos-ctl` and `cytos-mcp`: an agent drives the web viewer with Playwright
+> (see `web/shot.mjs`), which clicks the real controls instead of a parallel
+> command path. The mental model here — slides, sessions, layers, the
+> session-file vocabulary — is still accurate and worth reading; every
+> command example is not. Kept for reference until this guide is rewritten
+> for the web viewer.
+
 For AI assistants operating cytos — a desktop viewer for spatial biology
 slides (a big microscopy image with cell boundaries and transcript dots on
 top). You drive a running viewer over a local socket; the human sees the

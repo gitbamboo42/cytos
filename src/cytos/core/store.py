@@ -1,6 +1,6 @@
 """Opening a slide's zarr stores, whether a store is a directory or a `.zip`.
 
-A slide is a build artifact: `cytos-import` writes it once and `cytos-viewer`
+A slide is a build artifact: `cytos-import` writes it once and the viewer
 only ever reads it. Nothing rewrites a chunk, so the many-small-files layout a
 directory store needs buys nothing here and costs plenty -- a 1.4 GB slide is
 ~4000 files, which makes copying it to another machine slow and makes a

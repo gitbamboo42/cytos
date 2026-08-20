@@ -1,5 +1,5 @@
-// Screenshot the dev viewer and dump console/page errors — the web twin of
-// `cytos-ctl snapshot`: check rendering changes with your own eyes.
+// Screenshot the dev viewer and dump console/page errors — how a rendering
+// change gets checked with your own eyes rather than by asking the human.
 //
 // Usage: node shot.mjs <url> <out.png> [waitMs] [--headed] [--hover]
 //

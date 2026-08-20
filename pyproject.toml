@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "cytos"
 version = "0.1.0"
-description = "Fast, read-only viewer for spatial biology: cell segmentation polygons over a large OME-Zarr morphology image."
+description = "Build `.cytos` slides for spatial biology: cell segmentation polygons tiled over a large OME-Zarr morphology image."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -19,7 +19,6 @@ keywords = [
     "segmentation",
     "ome-zarr",
     "xenium",
-    "viewer",
     "visualization",
 ]
 classifiers = [
@@ -33,15 +32,10 @@ classifiers = [
 ]
 dependencies = [
     "numpy",
-    "pygfx",
-    "wgpu",
-    "rendercanvas",
-    "PySide6",
     "ome-zarr",
     "zarr",
     "tifffile",
     "dask[array]",
-    "plotlet>=0.6.4",
     "pyarrow",
     "mapbox_earcut",
     # Label-mask segmentation import (cytos.prep.labels): marching-squares
@@ -55,19 +49,11 @@ dependencies = [
     "imagecodecs",
 ]
 
-[project.optional-dependencies]
-# `cytos-mcp`, the MCP adapter for AI clients without a shell — optional
-# because the MCP SDK drags in a web stack the viewer itself never needs.
-mcp = ["mcp>=2"]
-
 [project.urls]
 Homepage = "https://github.com/gitbamboo42/cytos"
 Repository = "https://github.com/gitbamboo42/cytos"
 
 [project.scripts]
-cytos-viewer = "cytos.cli:viewer"
-cytos-ctl = "cytos.cli:ctl"
-cytos-mcp = "cytos.cli:mcp_server"
 cytos-import = "cytos.cli:import_slide"
 cytos-convert-ome-zarr = "cytos.cli:convert_ome_zarr"
 
