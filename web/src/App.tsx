@@ -471,6 +471,7 @@ export default function App() {
         slide={slide}
         settings={settings}
         features={features}
+        genes={genes}
         initialView={urlView}
         openingRect={openingRect}
         camera={camera}

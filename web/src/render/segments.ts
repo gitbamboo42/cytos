@@ -46,6 +46,10 @@ interface DeckSegmentTile {
     };
     cellIds: Uint32Array;
     vertexCellIds: Uint32Array;
+    /** Which layer this tile belongs to — the hover readout picks a
+     * sublayer, and this is how it gets back to the layer's features and
+     * settings. */
+    layerId: string;
   };
   outline: {
     length: number;
@@ -312,8 +316,9 @@ export function segmentTileLayer(
           length: tile.length,
           startIndices: tile.startIndices,
           attributes: { getPolygon: { value: tile.positions, size: 2 } },
-          cellIds: tile.cellIds, // for the tooltip, via sourceLayer.props.data
+          cellIds: tile.cellIds, // for the readout, via sourceLayer.props.data
           vertexCellIds: tile.vertexCellIds,
+          layerId: spec.id,
         },
         outline: {
           length: segments.segmentCellIds.length,
@@ -354,9 +359,12 @@ export function segmentTileLayer(
   });
 }
 
-/** Which cell is under the cursor — reads the picked sublayer's own data. */
-export function segmentTooltip(info: PickingInfo): string | null {
+/** Which cell is under the cursor, as dense cell id plus the layer it
+ * belongs to — read off the picked sublayer's own data. The text is built in
+ * `render/scene.tsx`, which is the one place that has the features and the
+ * settings as well as the pick. */
+export function pickedCell(info: PickingInfo): { layerId: string; cell: number } | null {
   const data = (info.sourceLayer?.props as { data?: DeckSegmentTile['fill'] })?.data;
   if (!data?.cellIds || info.index < 0) return null;
-  return `cell ${data.cellIds[info.index]}`;
+  return { layerId: data.layerId, cell: data.cellIds[info.index] };
 }

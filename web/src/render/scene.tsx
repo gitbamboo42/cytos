@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { OrthographicView } from '@deck.gl/core';
+import { OrthographicView, type PickingInfo } from '@deck.gl/core';
 import DeckGL, { type DeckGLRef } from '@deck.gl/react';
 
 import {
@@ -21,11 +21,13 @@ import {
   type SlideSettings,
 } from '../core/session';
 import type { ViewRect } from '../core/session';
-import type { FeatureTable } from '../io/features';
+import { categoryKey, type FeatureTable } from '../io/features';
+import type { GeneTable } from '../io/points';
 import type { LoadedSlide } from '../io/slide';
+import { unitAbbrev } from '../core/manifest';
 import { imageLayer } from './image';
-import { pointTileLayer, selectPointLevel } from './points';
-import { segmentTileLayer, segmentTooltip } from './segments';
+import { pickedPoint, pointTileLayer, selectPointLevel } from './points';
+import { pickedCell, segmentTileLayer } from './segments';
 
 /** Where the camera is now, in full-resolution image pixels, plus the size
  * of the canvas it is looking through — enough to work out the visible
@@ -66,10 +68,20 @@ function worldPerPixel(pixelSize: number, zoom: number): number {
   return pixelSize * Math.pow(2, -zoom);
 }
 
+/** A feature value as the readout shows it — four significant figures for a
+ * measurement, the number itself for a category, "unassigned" for a cell the
+ * feature says nothing about. Same three cases as `_hover_cell_text` in
+ * `src/cytos/ui/main_window.py`. */
+function featureText(value: number): string {
+  if (Number.isNaN(value)) return 'unassigned';
+  return Number.isInteger(value) ? String(value) : String(Number(value.toPrecision(4)));
+}
+
 export function SlideViewer({
   slide,
   settings,
   features,
+  genes,
   initialView,
   openingRect,
   camera,
@@ -81,6 +93,9 @@ export function SlideViewer({
   /** Per-cell attribute tables, keyed by segments layer key; null until
    * that layer's features.parquet arrives. */
   features: Record<string, FeatureTable | null>;
+  /** Gene names per point layer, keyed by points layer key — what a hovered
+   * transcript is called. Null until that layer's table arrives. */
+  genes: Record<string, GeneTable | null>;
   /** [x, y, zoom] in full-res pixel coords — the `?view=` URL param. An
    * explicit instruction, zoom and all, so it needs no fitting. */
   initialView?: [number, number, number];
@@ -102,6 +117,7 @@ export function SlideViewer({
   shot?: React.MutableRefObject<TakeShot | null>;
 }) {
   const [, height, width] = slide.loader[0].shape;
+  const units = unitAbbrev(slide.manifest.world_units);
   const segmentsOn = settings.sections.segments?.checked ?? true;
   const pointsOn = settings.sections.points?.checked ?? true;
 
@@ -135,6 +151,11 @@ export function SlideViewer({
   );
 
   const deck = useRef<DeckGLRef>(null);
+  // Where the pointer is, in world units. Written straight into the DOM
+  // rather than through React: it changes on every mouse move, and the panel
+  // has no business re-rendering that often (the camera is a ref for the
+  // same reason).
+  const readout = useRef<HTMLDivElement>(null);
   // Set while a thumbnail has been asked for: the next frame drawn hands the
   // canvas to this and clears it.
   const wanted = useRef<((shot: Blob | null) => void) | null>(null);
@@ -223,6 +244,44 @@ export function SlideViewer({
       }
     : opening;
 
+  /**
+   * What the cursor is over, in words.
+   *
+   * A transcript answers before the cell it sits in — a dot is drawn on top
+   * of the cell, so on a dot the gene is the answer and beside it the cell
+   * is, exactly as `on_pointer_move` decides it in the Qt viewer. deck picks
+   * the topmost layer for us, so the order here only has to match the draw
+   * order.
+   */
+  const hoverText = (info: PickingInfo): string | null => {
+    const point = pickedPoint(info);
+    if (point) {
+      const table = genes[pointsKey(point.layerId)];
+      const name = table?.names[point.gene] ?? `gene ${point.gene}`;
+      // At full detail a dot is one transcript and there is nothing to
+      // count; on an aggregate level it stands for several.
+      return point.count === null ? name : `${name} ×${point.count.toLocaleString()}`;
+    }
+    const hit = pickedCell(info);
+    if (!hit) return null;
+    const key = segmentsKey(hit.layerId);
+    const table = features[key];
+    const layerSettings = settings.layers[key] as SegmentSettings | undefined;
+    const colorBy = layerSettings?.color_by ?? null;
+    const feature = colorBy ? table?.get(colorBy) : undefined;
+    if (feature?.categorical && colorBy) {
+      // A hidden category is not there to be hovered — Qt's `pick_cell`
+      // refuses a cell whose colour has gone to alpha 0, and this is the
+      // same refusal.
+      const hidden = layerSettings?.hidden_categories?.[colorBy] ?? [];
+      if (hidden.includes(categoryKey(feature.values[hit.cell]))) return null;
+    }
+    const id = table?.ids?.get(hit.cell) ?? hit.cell;
+    const text = `cell ${id}`;
+    if (!feature || !colorBy) return text;
+    return `${text} · ${colorBy}: ${featureText(feature.values[hit.cell])}`;
+  };
+
   const layers = [
     imageLayer(slide, settings),
     ...slide.segments.map((source) => {
@@ -251,8 +310,9 @@ export function SlideViewer({
   ];
 
   return (
-    <DeckGL
-      ref={deck}
+    <>
+      <DeckGL
+        ref={deck}
       views={new OrthographicView({ id: 'ortho' })}
       deviceProps={{ webgl: { antialias: false } }}
       controller={true}
@@ -273,8 +333,35 @@ export function SlideViewer({
         if (level !== pointLevel) setPointLevel(level);
       }}
       onAfterRender={({ gl }) => grab(gl)}
-      getTooltip={segmentTooltip}
-      style={{ background: '#000' }}
-    />
+      getTooltip={hoverText}
+      onHover={(info) => {
+        const node = readout.current;
+        if (!node) return;
+        // `coordinate` is view space — full-resolution image pixels — and
+        // world µm is one multiply away. Off the canvas there is nothing to
+        // say, so the readout empties rather than freezing on a stale spot.
+        const at = info.coordinate;
+        node.textContent = at
+          ? `${(at[0] * slide.pixelSize).toFixed(1)}, ${(at[1] * slide.pixelSize).toFixed(1)} ${units}`
+          : '';
+      }}
+        style={{ background: '#000' }}
+      />
+      {/* Where the pointer is, bottom left — the web twin of the Qt window's
+          status bar. Transparent to the mouse, or it would steal the moves
+          that fill it in. */}
+      <div ref={readout} className="readout" style={readoutStyle} />
+    </>
   );
 }
+
+const readoutStyle = {
+  position: 'absolute',
+  left: 8,
+  bottom: 6,
+  color: '#9a9a9a',
+  font: '11px system-ui, sans-serif',
+  fontVariantNumeric: 'tabular-nums',
+  textShadow: '0 1px 2px #000',
+  pointerEvents: 'none',
+} as const;

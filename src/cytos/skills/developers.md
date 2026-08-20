@@ -238,6 +238,21 @@ views 2.4x too wide. And fields only Qt understands (its `window` blob) must
 ride through a save untouched, or opening someone's session here quietly
 throws half of it away.
 
+What the cursor is over is answered in one place (`hoverText` in
+`render/scene.tsx`), because only the scene has the pick, the features and
+the settings at once. Three rules come straight from Qt's `on_pointer_move`.
+A transcript answers before the cell it sits in, since the dot is drawn on
+top — deck picks the topmost layer, so the order only has to match the draw
+order. A cell is named by its *dataset* id ("odjkjhph-1"), not the dense
+index the tiles carry, which is why `io/features.ts` keeps the Arrow `id`
+column rather than dropping it with the other non-measurements; the value
+driving the colour is shown beside it, since that is the number being looked
+at. And a hidden category refuses to answer at all, as `pick_cell` does.
+Where the pointer is, in world units, goes to a readout in the corner — the
+web twin of the Qt window's status bar — written straight into the DOM,
+because it changes on every mouse move and React has no business
+re-rendering that often.
+
 A categorical feature — a clustering, not a measurement — is coloured by a
 qualitative palette and listed in a legend that doubles as a control
 (`ui/legend.tsx`, the twin of the legend in Qt's `ui/segment_panel.py`): the
@@ -274,6 +289,8 @@ side, change the other in the same commit.**
 | category palettes, unassigned grey | `render/polygons.py`, `render/points.py` | `core/colormaps.ts` |
 | feature ramp domain (2nd/98th pct) | `render/polygons.py` | `io/features.ts` |
 | autocontrast (1st/99.5th pct) | `prep/slide.py` | `render/image.ts` |
+| unit abbreviations | `unit_abbrev`, `ui/scale_bar.py` | `core/manifest.ts` |
+| hover readout wording | `_hover_cell_text`, `ui/main_window.py` | `render/scene.tsx` |
 
 The session vocabulary is the load-bearing row: `core/session.ts` is written in
 the field names `collect_session` produces, so a future save/load — or a remote

@@ -11,7 +11,7 @@
  * Arrow schema can see that marker.
  */
 
-import { tableFromIPC } from 'apache-arrow';
+import { tableFromIPC, type Vector } from 'apache-arrow';
 import initParquetWasm, { readParquet } from 'parquet-wasm/esm';
 // The wasm binary as a vite-managed asset URL — letting wasm-bindgen locate
 // it relative to import.meta.url breaks under the dev server's pre-bundling.
@@ -88,7 +88,16 @@ function categoryCounts(values: Float64Array): Category[] {
 }
 
 export class FeatureTable {
-  constructor(readonly features: Map<string, Feature>) {}
+  constructor(
+    readonly features: Map<string, Feature>,
+    /** The dataset's own cell ids ("odjkjhph-1"), by dense cell id — what
+     * the hover readout shows, since that is the id you would paste into
+     * another tool. Kept as the Arrow column rather than copied into a JS
+     * array: the column already stores its strings as one buffer plus
+     * offsets, and a slide can have 400k of them. Null if the table has no
+     * `id` column. */
+    readonly ids: Vector | null = null,
+  ) {}
 
   get names(): string[] {
     return [...this.features.keys()];
@@ -142,5 +151,5 @@ export async function loadFeatures(
       domain: robustDomain(values),
     });
   }
-  return new FeatureTable(features);
+  return new FeatureTable(features, table.getChild('id') ?? null);
 }

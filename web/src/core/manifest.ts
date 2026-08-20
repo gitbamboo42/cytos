@@ -69,6 +69,20 @@ export interface PointLayerSpec {
   visible?: boolean;
 }
 
+/** Short forms of the manifest's `world_units`, same table as
+ * `_UNIT_ABBREV` in `src/cytos/ui/scale_bar.py`. A unit this doesn't know is
+ * shown in full rather than silently relabelled. */
+const UNIT_ABBREV: Record<string, string> = {
+  micrometer: 'µm',
+  micron: 'µm',
+  millimeter: 'mm',
+  nanometer: 'nm',
+};
+
+export function unitAbbrev(units: string): string {
+  return UNIT_ABBREV[units] ?? units;
+}
+
 export interface SlideManifest {
   cytos_format: number;
   name: string;

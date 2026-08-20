@@ -15,6 +15,7 @@
  * the tissue.
  */
 
+import type { PickingInfo } from '@deck.gl/core';
 import { TileLayer } from '@deck.gl/geo-layers';
 import { ScatterplotLayer } from '@deck.gl/layers';
 import { Matrix4 } from '@math.gl/core';
@@ -141,6 +142,8 @@ interface DeckPointTile {
   };
   /** The raw tile, kept so restyling never needs the store again. */
   source: PointTile;
+  /** Which layer this tile belongs to, so a pick can find its gene names. */
+  layerId: string;
 }
 
 /** Which styling each tile's attribute arrays currently hold, so a settings
@@ -178,6 +181,21 @@ function geneSignature(genes: number[] | null): string {
   let sum = 0;
   for (const id of genes) sum = (sum * 31 + id) >>> 0;
   return `${genes.length}.${sum.toString(36)}`;
+}
+
+/** Which transcript is under the cursor: its dense gene id, and how many
+ * transcripts the dot stands for — null at full detail, where a dot is one
+ * transcript, exactly as `pick_point` reports it in the Qt viewer. */
+export function pickedPoint(
+  info: PickingInfo,
+): { layerId: string; gene: number; count: number | null } | null {
+  const data = (info.sourceLayer?.props as { data?: DeckPointTile })?.data;
+  if (!data?.source || info.index < 0) return null;
+  return {
+    layerId: data.layerId,
+    gene: data.source.geneId[info.index],
+    count: data.source.count ? data.source.count[info.index] : null,
+  };
 }
 
 export function pointTileLayer(
@@ -227,6 +245,7 @@ export function pointTileLayer(
         length: tile.geneId.length,
         attributes: { getPosition: { value: tile.coords, size: 2 } },
         source: tile,
+        layerId: spec.id,
       };
     },
     renderSubLayers: (props) => {
@@ -243,6 +262,9 @@ export function pointTileLayer(
         radiusMinPixels: 0,
         radiusMaxPixels: 64,
         stroked: false,
+        // A dot is drawn over the cell it sits in, so it answers the hover
+        // first — the same rule Qt's on_pointer_move follows.
+        pickable: true,
         modelMatrix: worldToPixels,
       });
     },
