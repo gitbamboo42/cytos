@@ -13,7 +13,7 @@ A fast, read-only viewer for spatial biology data: cell segmentation polygons
 drawn over a large OME-Zarr morphology image. Dropping editability (unlike
 napari's Shapes layer) unlocks precomputation, immutable GPU buffers, and
 tiling — the same approach Xenium Explorer, deck.gl, and Mapbox use at this
-scale. See `work-notes/plan.md` for the design rationale and roadmap.
+scale.
 
 The UI is a web app (`viewer/`: React + deck.gl + viv), run as a desktop shell
 over the disk or as a page over plain HTTP. Python keeps the pipeline:
@@ -284,7 +284,8 @@ be rebuilt for each of the visible tiles.
 
 Not built yet: annotations (selections, which will be documents of their own
 rather than part of a session — Reset must never destroy authored work) and
-adding a channel or segmentation to an open slide. The app is unsigned, which only
+adding a channel to an open slide (segments have this via
+`add_segments_to_slide`). The app is unsigned, which only
 matters for a build someone *downloads*, never for one built here.
 
 ## The cross-language contract
