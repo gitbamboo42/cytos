@@ -18,26 +18,19 @@ export const styles = {
     bottom: 0,
     width: 280,
     overflowY: 'auto',
-    background: 'rgba(24, 24, 28, 0.92)',
-    borderLeft: '1px solid #333',
+    background: 'var(--panel)',
+    borderLeft: '1px solid var(--border-subtle)',
     font: '12px system-ui, sans-serif',
-    color: '#ccc',
+    color: 'var(--text)',
     padding: '4px 0 12px',
   },
-  row: { padding: '6px 12px', borderBottom: '1px solid #26262a' },
+  row: { padding: '6px 12px', borderBottom: '1px solid var(--border-subtle)' },
   head: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 },
-  name: { flex: 1, color: '#eee' },
+  name: { flex: 1, color: 'var(--text)' },
   line: { display: 'flex', alignItems: 'center', gap: 6, margin: '3px 0' },
-  label: { width: 46, color: '#888' },
-  num: { width: 56, color: '#aaa', textAlign: 'right' as const, fontVariantNumeric: 'tabular-nums' },
-  button: {
-    background: '#2a2a30',
-    color: '#ccc',
-    border: '1px solid #444',
-    borderRadius: 3,
-    padding: '1px 8px',
-    cursor: 'pointer',
-  },
+  label: { width: 46, color: 'var(--text-muted)' },
+  num: { width: 56, color: 'var(--text-muted)', textAlign: 'right' as const, fontVariantNumeric: 'tabular-nums' },
+  button: { padding: '1px 8px', cursor: 'pointer' },
 } as const;
 
 /** A web-rendered dropdown. The native <select> popup is drawn by the OS
@@ -77,7 +70,7 @@ export function Dropdown({
 
   return (
     <div className="dd" ref={ref} style={grow ? { flex: 1 } : undefined}>
-      <button type="button" className="dd-button" onClick={() => setOpen(!open)}>
+      <button type="button" className="control dd-button" onClick={() => setOpen(!open)}>
         <span className="dd-value">{labels?.[value] ?? value}</span>
         <span className="dd-caret">▼</span>
       </button>
@@ -128,7 +121,7 @@ export function ClimControl({
   return (
     <div style={styles.line}>
       <input
-        className="panel-num"
+        className="control panel-num"
         type="number"
         min={0}
         max={top}
@@ -156,7 +149,7 @@ export function ClimControl({
         />
       </div>
       <input
-        className="panel-num"
+        className="control panel-num"
         type="number"
         min={0}
         max={top}

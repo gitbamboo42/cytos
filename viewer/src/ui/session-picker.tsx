@@ -21,6 +21,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import { uniqueSessionName } from '../core/session';
 import type { SessionInfo } from '../io/sessions';
+import './panel.css';
 
 /** Card size, in CSS pixels. Frames come in whatever shape the window was,
  * so each is fitted inside a card of exactly this size rather than sizing
@@ -33,8 +34,8 @@ const styles = {
   page: {
     position: 'absolute',
     inset: 0,
-    background: '#141414',
-    color: '#e8e8e8',
+    background: 'var(--page)',
+    color: 'var(--text)',
     font: '13px system-ui, sans-serif',
     display: 'flex',
     flexDirection: 'column',
@@ -42,15 +43,15 @@ const styles = {
     padding: '48px 24px 24px',
   },
   title: { fontSize: 20, fontWeight: 400 },
-  slide: { color: '#8a8a8a', marginTop: 4 },
+  slide: { color: 'var(--text-muted)', marginTop: 4 },
   list: {
     marginTop: 24,
     width: 460,
     maxHeight: '55vh',
     overflowY: 'auto',
-    border: '1px solid #2c2c2c',
+    border: '1px solid var(--border-subtle)',
     borderRadius: 4,
-    background: '#181818',
+    background: 'var(--card)',
   },
   card: {
     width: THUMB.width,
@@ -66,30 +67,22 @@ const styles = {
     overflow: 'hidden',
   },
   thumb: { maxWidth: '100%', maxHeight: '100%', display: 'block' },
-  name: { color: '#e8e8e8' },
-  when: { color: '#7c7c7c', marginTop: 3 },
-  note: { color: '#6a6a6a', marginTop: 3 },
+  name: { color: 'var(--text)' },
+  when: { color: 'var(--text-faint)', marginTop: 3 },
+  note: { color: 'var(--text-faint)', marginTop: 3 },
   buttons: { marginTop: 20, width: 460, display: 'flex', alignItems: 'center', gap: 8 },
-  button: {
-    background: '#2a2a30',
-    color: '#ccc',
-    border: '1px solid #444',
-    borderRadius: 3,
-    padding: '4px 12px',
-    font: 'inherit',
-    cursor: 'pointer',
-  },
+  button: { padding: '4px 12px', cursor: 'pointer' },
   input: {
     flex: 1,
     minWidth: 0,
-    background: '#1c1c20',
-    color: '#eee',
-    border: '1px solid #444',
+    background: 'var(--input)',
+    color: 'var(--text)',
+    border: '1px solid var(--border)',
     borderRadius: 3,
     padding: '4px 8px',
     font: 'inherit',
   },
-  empty: { color: '#7c7c7c', padding: '24px 12px', textAlign: 'center' },
+  empty: { color: 'var(--text-faint)', padding: '24px 12px', textAlign: 'center' },
 } as const;
 
 function whenText(modified: number | null): string {
@@ -249,10 +242,10 @@ export function SessionPicker({
                 if (e.key === 'Escape') setMode('list');
               }}
             />
-            <button type="button" style={styles.button} onClick={commitNew}>
+            <button type="button" className="control" style={styles.button} onClick={commitNew}>
               Create
             </button>
-            <button type="button" style={styles.button} onClick={() => setMode('list')}>
+            <button type="button" className="control" style={styles.button} onClick={() => setMode('list')}>
               Cancel
             </button>
           </>
@@ -264,7 +257,7 @@ export function SessionPicker({
             </span>
             <button
               type="button"
-              style={styles.button}
+              className="control" style={styles.button}
               onClick={() => {
                 setMode('list');
                 onDelete(chosen);
@@ -272,31 +265,31 @@ export function SessionPicker({
             >
               Delete
             </button>
-            <button type="button" style={styles.button} onClick={() => setMode('list')}>
+            <button type="button" className="control" style={styles.button} onClick={() => setMode('list')}>
               Keep
             </button>
           </>
         )}
         {mode === 'list' && (
           <>
-            <button type="button" style={styles.button} onClick={startNew}>
+            <button type="button" className="control" style={styles.button} onClick={startNew}>
               New Session
             </button>
             <button
               type="button"
-              style={styles.button}
+              className="control" style={styles.button}
               disabled={!chosen}
               onClick={() => setMode('delete')}
             >
               Delete
             </button>
             <span style={{ flex: 1 }} />
-            <button type="button" style={styles.button} onClick={onCancel}>
+            <button type="button" className="control" style={styles.button} onClick={onCancel}>
               Cancel
             </button>
             <button
               type="button"
-              style={styles.button}
+              className="control" style={styles.button}
               disabled={!chosen}
               onClick={() => chosen && onOpen(chosen)}
             >

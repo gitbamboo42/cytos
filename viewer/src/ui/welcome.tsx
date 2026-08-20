@@ -16,8 +16,8 @@ const styles = {
   page: {
     position: 'absolute',
     inset: 0,
-    background: '#141414',
-    color: '#e8e8e8',
+    background: 'var(--page)',
+    color: 'var(--text)',
     font: '13px system-ui, sans-serif',
     display: 'flex',
     flexDirection: 'column',
@@ -26,17 +26,17 @@ const styles = {
     gap: 6,
   },
   title: { fontSize: 34, fontWeight: 400 },
-  subtitle: { color: '#8a8a8a' },
+  subtitle: { color: 'var(--text-muted)' },
   // Left-aligned inside a centred block: centring each line on its own would
   // stagger them, so two lines starting with "File" wouldn't line up.
-  hint: { color: '#6f6f6f', marginTop: 22, textAlign: 'left', whiteSpace: 'pre-line' },
+  hint: { color: 'var(--text-faint)', marginTop: 22, textAlign: 'left', whiteSpace: 'pre-line' },
   recents: { marginTop: 28, display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 2, minWidth: 240 },
-  recentsLabel: { color: '#6f6f6f', marginBottom: 4 },
+  recentsLabel: { color: 'var(--text-faint)', marginBottom: 4 },
   recent: {
     background: 'none',
     border: 'none',
     borderRadius: 3,
-    color: '#b9b9b9',
+    color: 'var(--text-muted)',
     font: 'inherit',
     textAlign: 'left',
     padding: '3px 6px',

@@ -50,6 +50,7 @@ export function ImageRow({
         />
         <span style={styles.name}>{layer.id}</span>
         <button
+          className="control"
           style={styles.button}
           disabled={busy}
           title="contrast from the 1st/99.5th percentile"
@@ -98,7 +99,7 @@ export function SegmentRow({
           onChange={(e) => onChange({ visible: e.target.checked })}
         />
         <span style={styles.name}>
-          {layer.id} <span style={{ color: '#777' }}>({layer.n_cells.toLocaleString()})</span>
+          {layer.id} <span style={{ color: 'var(--text-faint)' }}>({layer.n_cells.toLocaleString()})</span>
         </span>
       </div>
       <div style={styles.line}>
@@ -204,7 +205,7 @@ export function PointRow({
         />
         <span style={styles.name}>
           {layer.id}{' '}
-          <span style={{ color: '#777' }}>({layer.n_points.toLocaleString()})</span>
+          <span style={{ color: 'var(--text-faint)' }}>({layer.n_points.toLocaleString()})</span>
         </span>
       </div>
       <div style={styles.line}>

@@ -135,7 +135,7 @@ const styles = {
     padding: '5px 8px 6px',
     borderRadius: 4,
     background: 'rgba(0, 0, 0, 0.55)',
-    color: '#fff',
+    color: 'var(--text-bright)',
     font: '11px system-ui, sans-serif',
     textAlign: 'center',
     pointerEvents: 'none',
@@ -144,14 +144,14 @@ const styles = {
   bar: {
     height: 9,
     margin: '0 auto',
-    borderLeft: '1px solid #fff',
-    borderRight: '1px solid #fff',
-    borderBottom: '4px solid #fff',
+    borderLeft: '1px solid var(--text-bright)',
+    borderRight: '1px solid var(--text-bright)',
+    borderBottom: '4px solid var(--text-bright)',
     boxSizing: 'border-box',
   },
   status: {
     padding: '6px 12px 0',
-    color: '#777',
+    color: 'var(--text-faint)',
     fontVariantNumeric: 'tabular-nums',
   },
 } as const;

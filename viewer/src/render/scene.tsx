@@ -345,7 +345,7 @@ export function SlideViewer({
           ? `${(at[0] * slide.pixelSize).toFixed(1)}, ${(at[1] * slide.pixelSize).toFixed(1)} ${units}`
           : '';
       }}
-        style={{ background: '#000' }}
+        style={{ background: 'var(--bg)' }}
       />
       {/* Where the pointer is, bottom left — the web twin of the Qt window's
           status bar. Transparent to the mouse, or it would steal the moves
@@ -359,7 +359,7 @@ const readoutStyle = {
   position: 'absolute',
   left: 8,
   bottom: 6,
-  color: '#9a9a9a',
+  color: 'var(--text-muted)',
   font: '11px system-ui, sans-serif',
   fontVariantNumeric: 'tabular-nums',
   textShadow: '0 1px 2px #000',

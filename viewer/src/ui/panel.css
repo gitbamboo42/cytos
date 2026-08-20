@@ -2,6 +2,16 @@
    only the thumbs take pointer events; the visible track and the selected
    interval are plain divs underneath. */
 
+/* One look for every small control — a button, a number field, a dropdown
+   button. Each use adds its own layout (width, padding, cursor) on top. */
+.control {
+  background: var(--control);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font: inherit;
+}
+
 .dual {
   position: relative;
   flex: 1;
@@ -20,11 +30,11 @@
 .dual .track {
   left: 0;
   right: 0;
-  background: #3a3a40;
+  background: var(--border);
 }
 
 .dual .range {
-  background: #4b9fff;
+  background: var(--accent);
 }
 
 .dual input[type='range'] {
@@ -52,7 +62,7 @@
   margin-top: 3px;
   border-radius: 50%;
   background: #dfe4ea;
-  border: 1px solid #666;
+  border: 1px solid var(--border);
   pointer-events: auto;
   cursor: ew-resize;
 }
@@ -67,18 +77,13 @@
   height: 12px;
   border-radius: 50%;
   background: #dfe4ea;
-  border: 1px solid #666;
+  border: 1px solid var(--border);
   pointer-events: auto;
   cursor: ew-resize;
 }
 
 .panel-num {
   width: 54px;
-  background: #2a2a30;
-  color: #ccc;
-  border: 1px solid #444;
-  border-radius: 3px;
-  font: inherit;
   padding: 1px 3px;
   text-align: right;
 }
@@ -103,14 +108,14 @@
   width: 16px;
   height: 16px;
   flex: none;
-  border: 1px solid #777;
+  border: 1px solid var(--border-bright);
   border-radius: 3px;
   padding: 0;
   cursor: pointer;
 }
 
 .swatch:hover {
-  border-color: #ccc;
+  border-color: var(--text);
 }
 
 .cp-pop {
@@ -119,8 +124,8 @@
   left: 0;
   margin-top: 2px;
   padding: 8px 10px;
-  background: #232328;
-  border: 1px solid #4a4a52;
+  background: var(--popup);
+  border: 1px solid var(--border);
   border-radius: 3px;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
   z-index: 20;
@@ -132,7 +137,7 @@
   align-items: center;
   gap: 6px;
   margin: 6px 0 4px;
-  color: #888;
+  color: var(--text-muted);
   font-size: 10px;
 }
 
@@ -145,7 +150,7 @@
   height: 0;
   margin: 0;
   border: 0;
-  border-top: 1px solid #3a3a42;
+  border-top: 1px solid var(--border);
 }
 
 .cp-grid {
@@ -158,33 +163,33 @@
   width: 18px;
   height: 18px;
   padding: 0;
-  border: 1px solid #777;
+  border: 1px solid var(--border-bright);
   border-radius: 2px;
   cursor: pointer;
   background: none;
 }
 
 .cp-swatch:hover {
-  border: 2px solid #4b9fff;
+  border: 2px solid var(--accent);
 }
 
 /* Selected outranks hover, as in the Qt picker. */
 .cp-swatch.selected,
 .cp-swatch.selected:hover {
-  border: 2px solid #eee;
+  border: 2px solid var(--text);
 }
 
 .cp-text {
-  color: #ccc;
-  background: #2a2a30;
+  color: var(--text);
+  background: var(--control);
   font: inherit;
   line-height: 1;
 }
 
 .cp-text:disabled {
-  color: #555;
+  color: var(--text-disabled);
   cursor: default;
-  border-color: #444;
+  border-color: var(--border);
 }
 
 .cp-buttons {
@@ -255,21 +260,11 @@
 
 .cp-hex {
   width: 72px;
-  background: #2a2a30;
-  color: #ccc;
-  border: 1px solid #444;
-  border-radius: 3px;
-  font: inherit;
   padding: 1px 4px;
 }
 
 .cp-add {
   margin-left: auto;
-  background: #2a2a30;
-  color: #ccc;
-  border: 1px solid #444;
-  border-radius: 3px;
-  font: inherit;
   padding: 1px 8px;
   cursor: pointer;
 }
@@ -277,7 +272,7 @@
 .cp-hover {
   margin-top: 6px;
   min-height: 14px;
-  color: #999;
+  color: var(--text-muted);
   font-size: 11px;
   white-space: nowrap;
 }
@@ -295,11 +290,6 @@
   align-items: center;
   gap: 4px;
   width: 100%;
-  background: #2a2a30;
-  color: #ccc;
-  border: 1px solid #444;
-  border-radius: 3px;
-  font: inherit;
   padding: 1px 4px;
   cursor: pointer;
   white-space: nowrap;
@@ -313,7 +303,7 @@
 }
 
 .dd-button .dd-caret {
-  color: #888;
+  color: var(--text-muted);
   font-size: 8px;
 }
 
@@ -325,8 +315,8 @@
   max-height: 190px;
   overflow-y: auto;
   margin-top: 2px;
-  background: #232328;
-  border: 1px solid #4a4a52;
+  background: var(--popup);
+  border: 1px solid var(--border);
   border-radius: 3px;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
   z-index: 10;
@@ -339,12 +329,12 @@
 }
 
 .dd-item:hover {
-  background: #33333b;
+  background: var(--popup-hover);
 }
 
 .dd-item.selected {
-  color: #fff;
-  background: #2d4a6b;
+  color: var(--text-bright);
+  background: var(--selection);
 }
 
 .section-head {
@@ -357,13 +347,13 @@
 }
 
 .section-head .caret {
-  color: #888;
+  color: var(--text-muted);
   font-size: 9px;
   width: 10px;
 }
 
 .section-head .title {
-  color: #888;
+  color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.08em;
   font-size: 10px;
@@ -371,8 +361,8 @@
 
 /* Welcome-screen recents: no chrome until the pointer is on one. */
 .welcome-recent:hover {
-  background: #202024;
-  color: #e8e8e8;
+  background: var(--hover);
+  color: var(--text);
 }
 
 /* Session picker rows: a thumbnail card, then the name and when it was
@@ -382,7 +372,7 @@
   align-items: center;
   gap: 12px;
   padding: 8px 10px;
-  border-bottom: 1px solid #232323;
+  border-bottom: 1px solid var(--border-subtle);
   cursor: pointer;
 }
 
@@ -391,17 +381,17 @@
 }
 
 .session-row:hover {
-  background: #202024;
+  background: var(--hover);
 }
 
 .session-row.selected,
 .session-row.selected:hover {
-  background: #2f4a72;
+  background: var(--selection);
 }
 
 .session-row.off,
 .session-row.off:hover {
   background: none;
-  color: #666;
+  color: var(--text-disabled);
   cursor: default;
 }

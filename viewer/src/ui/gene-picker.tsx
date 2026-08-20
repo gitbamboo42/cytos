@@ -147,7 +147,7 @@ export function GenePicker({
               >
                 {open ? '▾' : '▸'} genes
               </span>
-              <span style={{ color: '#777' }}>{genes.names.length.toLocaleString()}</span>
+              <span style={{ color: 'var(--text-faint)' }}>{genes.names.length.toLocaleString()}</span>
             </div>
           )}
           {open &&
@@ -182,16 +182,16 @@ export function GenePicker({
                   />
                 )}
                 <span style={{ flex: 1, minWidth: 0 }}>{gene.name}</span>
-                <span style={{ color: '#777' }}>{gene.count.toLocaleString()}</span>
+                <span style={{ color: 'var(--text-faint)' }}>{gene.count.toLocaleString()}</span>
               </div>
             ))}
           {open && shown.length === 0 && (
-            <div style={{ color: '#777', padding: '1px 4px 1px 22px' }}>
+            <div style={{ color: 'var(--text-faint)', padding: '1px 4px 1px 22px' }}>
               {needle ? 'no match' : 'none selected — click search to browse'}
             </div>
           )}
           {open && matched.length > shown.length && (
-            <div style={{ color: '#777', padding: '1px 4px 1px 22px' }}>
+            <div style={{ color: 'var(--text-faint)', padding: '1px 4px 1px 22px' }}>
               …{(matched.length - shown.length).toLocaleString()} more — search to
               narrow
             </div>
@@ -206,14 +206,14 @@ export function GenePicker({
 }
 
 const geneStyles = {
-  rootItem: { color: '#aaa' },
+  rootItem: { color: 'var(--text-muted)' },
   child: { paddingLeft: 16 },
-  footer: { color: '#777', marginTop: 3 },
+  footer: { color: 'var(--text-faint)', marginTop: 3 },
   search: {
-    background: '#131316',
-    border: '1px solid #35353b',
+    background: 'var(--input)',
+    border: '1px solid var(--border)',
     borderRadius: 3,
-    color: '#ddd',
+    color: 'var(--text)',
     font: 'inherit',
     padding: '2px 6px',
     width: '100%',
@@ -223,7 +223,7 @@ const geneStyles = {
     maxHeight: 180,
     overflowY: 'auto' as const,
     marginTop: 4,
-    border: '1px solid #26262a',
+    border: '1px solid var(--border-subtle)',
     borderRadius: 3,
   },
   item: {

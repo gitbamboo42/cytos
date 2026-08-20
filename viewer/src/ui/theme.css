@@ -1,0 +1,46 @@
+/* The palette for every piece of chrome — panels, popups, text, borders.
+   Components use these names, never raw hex, so a colour has one home. A
+   future second look would go here too, as a `:root[data-theme='...']`
+   block overriding these. Scene and data colours (channel hues, category
+   palettes) are not chrome and live in src/core/colormaps.ts.
+
+   index.html keeps a literal copy of the background and text colours: in
+   dev this file arrives with the JS bundle, and without the fallback the
+   page would flash white until it does. */
+
+:root {
+  /* surfaces, dark to light */
+  --bg: #000; /* the scene canvas and the page behind it */
+  --input: #131316; /* text inputs */
+  --page: #141414; /* full-page screens: welcome, session picker */
+  --card: #181818; /* raised list boxes on a page */
+  --hover: #202024; /* row hover on a page or card */
+  --popup: #232328; /* floating menus and pickers */
+  --control: #2a2a30; /* buttons, number fields, dropdown buttons */
+  --popup-hover: #33333b; /* row hover inside a popup */
+  --panel: rgba(24, 24, 28, 0.92); /* the layers panel */
+  --selection: #2f4a72; /* the selected row or option */
+  --accent: #4b9fff; /* slider fill, hovered swatch ring */
+
+  /* lines */
+  --border-subtle: #26262a; /* row separators, quiet edges */
+  --border: #444; /* control outlines */
+  --border-bright: #777; /* rings around colour swatches */
+
+  /* text, dim to bright */
+  --text-disabled: #555;
+  --text-faint: #777; /* counts, footnotes, the status line */
+  --text-muted: #999; /* labels, captions, readouts */
+  --text: #ddd; /* everything meant to be read */
+  --text-bright: #fff; /* selected options, the scale bar */
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, sans-serif;
+}

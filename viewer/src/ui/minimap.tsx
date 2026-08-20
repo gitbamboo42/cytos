@@ -137,7 +137,7 @@ export function Minimap({
   };
 
   return (
-    <div style={{ padding: '4px 12px 8px', borderBottom: '1px solid #26262a' }}>
+    <div style={{ padding: '4px 12px 8px', borderBottom: '1px solid var(--border-subtle)' }}>
       <canvas
         ref={canvasRef}
         style={{ width: cssWidth, height: cssHeight, cursor: 'crosshair', display: 'block' }}

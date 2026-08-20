@@ -61,7 +61,7 @@ export function CategoryLegend({
     <div style={{ ...styles.line, alignItems: 'flex-start' }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={legendStyles.list}>
-          <div style={{ ...legendStyles.item, color: '#aaa' }}>
+          <div style={{ ...legendStyles.item, color: 'var(--text-muted)' }}>
             <input
               type="checkbox"
               checked={hidden.length === 0}
@@ -75,7 +75,7 @@ export function CategoryLegend({
               }
             />
             <span style={{ flex: 1, minWidth: 0 }}>{feature.name}</span>
-            <span style={{ color: '#777' }}>{feature.categories.length}</span>
+            <span style={{ color: 'var(--text-faint)' }}>{feature.categories.length}</span>
           </div>
           {feature.categories.map((category) => (
             <div key={category.key} style={{ ...legendStyles.item, paddingLeft: 16 }}>
@@ -91,7 +91,7 @@ export function CategoryLegend({
                 onChange={(hex) => setColor(category.key, hex)}
               />
               <span style={{ flex: 1, minWidth: 0 }}>{category.key}</span>
-              <span style={{ color: '#777' }}>{category.count.toLocaleString()}</span>
+              <span style={{ color: 'var(--text-faint)' }}>{category.count.toLocaleString()}</span>
             </div>
           ))}
         </div>
@@ -107,7 +107,7 @@ const legendStyles = {
   list: {
     maxHeight: 180,
     overflowY: 'auto' as const,
-    border: '1px solid #26262a',
+    border: '1px solid var(--border-subtle)',
     borderRadius: 3,
   },
   item: {
@@ -116,5 +116,5 @@ const legendStyles = {
     gap: 6,
     padding: '1px 4px',
   },
-  footer: { color: '#777', marginTop: 3 },
+  footer: { color: 'var(--text-faint)', marginTop: 3 },
 };

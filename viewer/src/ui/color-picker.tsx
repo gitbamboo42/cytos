@@ -301,7 +301,7 @@ export function ColorSwatch({
                 <HueStrip hue={hsv[0]} onChange={(h) => setFromHsv(h, hsv[1], hsv[2])} />
                 <div className="cp-hex-row">
                   <input
-                    className="cp-hex"
+                    className="control cp-hex"
                     value={hex}
                     spellCheck={false}
                     onChange={(e) => {
@@ -311,7 +311,7 @@ export function ColorSwatch({
                       }
                     }}
                   />
-                  <button type="button" className="cp-add" onClick={addPicked}>
+                  <button type="button" className="control cp-add" onClick={addPicked}>
                     Add
                   </button>
                 </div>
