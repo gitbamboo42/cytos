@@ -27,6 +27,7 @@ import type { CustomColors } from './color-picker';
 import { Section, styles } from './controls';
 import { Minimap } from './minimap';
 import { ImageRow, PointRow, SegmentRow } from './rows';
+import { StatusLine } from './scale-bar';
 
 interface PanelProps {
   slide: LoadedSlide;
@@ -126,6 +127,7 @@ export function Panel({
           ))}
         </Section>
       )}
+      <StatusLine slide={slide} camera={camera} />
     </div>
   );
 }

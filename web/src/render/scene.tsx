@@ -64,7 +64,7 @@ export type TakeShot = () => Promise<Blob | null>;
 
 /** World µm covered by one screen pixel. View space is full-resolution image
  * pixels, so a screen pixel spans 2^-zoom of them, each `pixelSize` µm wide. */
-function worldPerPixel(pixelSize: number, zoom: number): number {
+export function worldPerPixel(pixelSize: number, zoom: number): number {
   return pixelSize * Math.pow(2, -zoom);
 }
 

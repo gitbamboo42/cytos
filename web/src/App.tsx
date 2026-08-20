@@ -45,6 +45,7 @@ import { loadSlide, type LoadedSlide } from './io/slide';
 import { SlideViewer, type CameraView, type Recenter, type TakeShot } from './render/scene';
 import type { CustomColors } from './ui/color-picker';
 import { Panel } from './ui/panel';
+import { ScaleBar } from './ui/scale-bar';
 import { SessionPicker } from './ui/session-picker';
 import { Welcome } from './ui/welcome';
 
@@ -478,6 +479,7 @@ export default function App() {
         recenter={recenter}
         shot={shot}
       />
+      <ScaleBar slide={slide} camera={camera} />
       <Panel
         slide={slide}
         settings={settings}

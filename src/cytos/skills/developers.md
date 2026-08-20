@@ -253,6 +253,16 @@ web twin of the Qt window's status bar — written straight into the DOM,
 because it changes on every mouse move and React has no business
 re-rendering that often.
 
+The scale bar above it and the status line under the panel (`ui/scale-bar.tsx`)
+are driven the other way, by the camera ref on the minimap's 100 ms timer,
+since a zoom is what changes them and nothing reports one. Both round rather
+than report: the bar takes the longest 1/2/5 x 10^n distance that fits in
+120 px and promotes µm to mm past a thousand, exactly as `ui/scale_bar.py`
+does, and the status line keeps to what a viewer wants from Qt's dock full of
+numbers — how much ground a screen pixel covers, how many tiles have arrived,
+and how many failed, because a tile that 404s is a finding rather than
+noise.
+
 A categorical feature — a clustering, not a measurement — is coloured by a
 qualitative palette and listed in a legend that doubles as a control
 (`ui/legend.tsx`, the twin of the legend in Qt's `ui/segment_panel.py`): the
@@ -290,6 +300,7 @@ side, change the other in the same commit.**
 | feature ramp domain (2nd/98th pct) | `render/polygons.py` | `io/features.ts` |
 | autocontrast (1st/99.5th pct) | `prep/slide.py` | `render/image.ts` |
 | unit abbreviations | `unit_abbrev`, `ui/scale_bar.py` | `core/manifest.ts` |
+| scale bar length rule (1/2/5, 120 px) | `nice_length`, `ui/scale_bar.py` | `ui/scale-bar.tsx` |
 | hover readout wording | `_hover_cell_text`, `ui/main_window.py` | `render/scene.tsx` |
 
 The session vocabulary is the load-bearing row: `core/session.ts` is written in
