@@ -27,10 +27,10 @@ env/
 /CLAUDE.md
 .claude/
 
-# Web viewer (`dist/` above covers the vite build; `release/` is the
+# Viewer (`dist/` above covers the vite build; `release/` is the
 # packaged desktop app, ~300 MB of Electron per build)
-web/node_modules/
-web/release/
+viewer/node_modules/
+viewer/release/
 
 # Project data (large binary datasets, fetched on demand)
 /data/

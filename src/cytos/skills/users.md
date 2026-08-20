@@ -6,7 +6,7 @@ tool is not in your training data; this guide is where the answers are.
 
 Two halves. The **pip package** builds slides and defines the format:
 `cytos-import` is its one real command. The **viewer** is a desktop app (and
-the same page in a browser) built from `web/` — it only ever reads slides.
+the same page in a browser) built from `viewer/` — it only ever reads slides.
 There is no command surface for driving it: it is a GUI, and you drive a GUI
 the way a person does, by clicking it (see *Driving the app* below).
 
@@ -46,7 +46,7 @@ Both take minutes on real data — a whole-slide import is not a quick check.
 
 ## Running the viewer
 
-From `web/`:
+From `viewer/`:
 
 ```
 npm run app:dev -- <slide dir>   # desktop shell, needs `npm run dev` alongside
@@ -66,7 +66,7 @@ Three parameters, and they are the only "commands" the viewer has:
 
 ## Driving the app
 
-Use Playwright. `web/shot.mjs` opens a page, waits, screenshots it and prints
+Use Playwright. `viewer/shot.mjs` opens a page, waits, screenshots it and prints
 console errors, failed responses and tile statistics:
 
 ```

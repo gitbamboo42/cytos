@@ -1,5 +1,5 @@
 {
-  "name": "cytos-web",
+  "name": "cytos-viewer",
   "private": true,
   "version": "0.0.0",
   "type": "module",

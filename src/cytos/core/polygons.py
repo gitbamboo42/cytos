@@ -1,6 +1,6 @@
 """Cell segmentation polygon data model: ragged-array boundary geometry plus
 per-cell attributes. Pure numpy/pyarrow, and no GPU: drawing is the viewer's
-job, in `web/src/render/segments.ts`.
+job, in `viewer/src/render/segments.ts`.
 
 Raw vertex coordinates are already in the same world space as
 cytos.core.image's PyramidLevel (world Y increasing downward, matching pixel

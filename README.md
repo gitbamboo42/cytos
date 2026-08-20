@@ -4,7 +4,7 @@ A fast, read-only viewer for spatial biology data: cell segmentation polygons
 drawn over a large OME-Zarr morphology image.
 
 Two halves, one format between them. The **viewer** is a desktop app (and the
-same page in a browser) built from `web/`. The **pip package** is the
+same page in a browser) built from `viewer/`. The **pip package** is the
 pipeline: it turns a source dataset into a `.cytos` slide and defines what
 that slide is. Nothing in the package draws anything.
 
@@ -23,7 +23,7 @@ cytos-convert-ome-zarr path/to/morphology.ome.tif --channel 0 --out out.ome.zarr
 
 ## The viewer
 
-The app lives in `web/`. It is not part of the pip install and needs Node.
+The app lives in `viewer/`. It is not part of the pip install and needs Node.
 From a checkout:
 
 ```
@@ -47,6 +47,6 @@ The guides ship inside the package as plain markdown, in
 `src/cytos/skills/`: `users.md` for operating the viewer, `developers.md`
 for working on the code. Point your assistant at them.
 
-The web viewer is driven with Playwright — `web/shot.mjs` opens a page,
+The web viewer is driven with Playwright — `viewer/shot.mjs` opens a page,
 clicks the real controls and screenshots the result, which is how a change
 gets checked without anyone refereeing pixels by hand.

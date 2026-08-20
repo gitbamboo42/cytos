@@ -15,7 +15,7 @@ napari's Shapes layer) unlocks precomputation, immutable GPU buffers, and
 tiling — the same approach Xenium Explorer, deck.gl, and Mapbox use at this
 scale. See `work-notes/plan.md` for the design rationale and roadmap.
 
-The UI is a web app (`web/`: React + deck.gl + viv), run as a desktop shell
+The UI is a web app (`viewer/`: React + deck.gl + viv), run as a desktop shell
 over the disk or as a page over plain HTTP. Python keeps the pipeline:
 `prep/` needs tifffile, imagecodecs, scikit-image, earcut and pyarrow, none
 of which belongs in a browser, and `core/` stays with it because it defines
@@ -40,7 +40,7 @@ pulls in real dependencies and registers console-script commands (see
 `cli.py`). `cytos-import` is the product: it builds a `.cytos` slide from a
 source dataset. (`cytos-convert-ome-zarr` is a standalone OME-TIFF →
 OME-Zarr utility the importer also calls.) The viewer is not here — it is
-the app in `web/`, which the pip package does not carry.
+the app in `viewer/`, which the pip package does not carry.
 
 `src/cytos/` is two layers and nothing else now that the viewer left:
 `core/` (pure data model, no GPU/UI imports) and `prep/` (offline
@@ -50,12 +50,12 @@ root (the one place listing every console script), `skills/` (the shipped AI gui
 read each third-party data source, one `importing-<source>.md` per source —
 see below).
 
-`web/` is a separate vite + React + TypeScript app with its own
+`viewer/` is a separate vite + React + TypeScript app with its own
 `package.json` and `node_modules` (gitignored); nothing in `src/` imports it,
 and `pip install cytos` does not carry it. It carries the same one-directional
 rule, as directories: `core/` (model) ← `io/` (readers) ← `render/` (deck.gl
 layers) ← `ui/` (React). Check direction before adding an import.
-`web/electron/` is the desktop shell — a main process and a preload script,
+`viewer/electron/` is the desktop shell — a main process and a preload script,
 outside that chain and importing nothing from it. The page reaches the shell
 only through `io/host.ts`, whose interface is the twin of what `preload.cjs`
 exposes.
@@ -116,13 +116,13 @@ written once and only ever read, and 6 files copy between machines in a way
 3,970 don't. Reads are as fast or faster. Directories still open; the `format`
 tag says which, and `cytos-import --no-zip` writes them. See
 `src/cytos/core/store.py`. Both readers take either form — the web one reads
-a zip over HTTP ranges (`web/src/io/zip.ts`), so no slide needs a second
+a zip over HTTP ranges (`viewer/src/io/zip.ts`), so no slide needs a second
 `--no-zip` copy. That works because the zip **compresses nothing**: every
 entry is STORED, since zarr already compressed each chunk, so an entry's
 bytes *are* the chunk and there is no inflate step. Opening costs two small
 reads (end-of-central-directory, then the directory); after that a chunk is
 one ranged GET, the same as a directory would cost. `ReadRange` in
-`web/src/io/read.ts` is the one place bytes enter the web app — an Electron
+`viewer/src/io/read.ts` is the one place bytes enter the web app — an Electron
 local-file reader lands there and nowhere else.
 
 `cytos.json` holds each layer's *defaults*; a session (`sessions/<slug>.json`
@@ -442,5 +442,5 @@ exactly this reason — a 404 on a tile chunk is a finding, not noise.
 ## Environment
 
 Python setup (conda envs, interpreter paths) is in the gitignored
-`CLAUDE.local.md` — machine-specific, not project knowledge. `web/` needs
+`CLAUDE.local.md` — machine-specific, not project knowledge. `viewer/` needs
 Node and a plain `npm install`.

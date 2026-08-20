@@ -12,7 +12,7 @@
  * reader and `RangeStore`, `ZipStore`, viv and deck are untouched.
  *
  * Run it two ways:
- *   npm run app        -- loads web/dist, what the packaged app does
+ *   npm run app        -- loads viewer/dist, what the packaged app does
  *   npm run app:dev    -- loads the vite server instead, so edits hot-reload
  */
 

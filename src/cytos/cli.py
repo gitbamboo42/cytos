@@ -3,7 +3,7 @@ a single dispatch file so "what commands does cytos install, and what do they
 run" is answerable by reading one place, not by hunting through the package.
 
 `cytos-import` builds a `.cytos` slide from a source dataset; that is what
-this package is for, now that the viewer is the app in `web/`. The per-layer
+this package is for, now that the viewer is the app in `viewer/`. The per-layer
 prep steps are not commands of their own — a layer's world grid is the
 slide's, so preparing one in isolation would put it on a grid nothing else
 shares.

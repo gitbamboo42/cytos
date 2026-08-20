@@ -2,7 +2,7 @@
 
 This package is the pipeline and the format. `cytos-import` turns a source
 dataset into a `.cytos` slide, `cytos.core` defines what that slide is, and
-nothing here draws anything: the viewer is the web/Electron app in `web/`,
+nothing here draws anything: the viewer is the web/Electron app in `viewer/`,
 which reads the same slides over HTTP or off the disk.
 
 Deliberately exports nothing — cytos is an application, not a library, and

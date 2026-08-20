@@ -1,5 +1,5 @@
 """The `.cytos` slide: one directory holding every layer of one dataset, plus
-a plain-JSON manifest that says what's in it. The viewer (the app in `web/`)
+a plain-JSON manifest that says what's in it. The viewer (the app in `viewer/`)
 opens a slide and nothing else; `cytos-import` (see `cytos.prep.slide`) is
 what builds one.
 
@@ -68,7 +68,7 @@ IMAGE_ZIP_FORMAT = "ome-ngff-0.5-zip"
 
 # Black->hue ramps, in the order channels get assigned one when the importer
 # isn't told otherwise. The hues themselves are the viewer's
-# (`web/src/core/colormaps.ts`); what the manifest carries is these names.
+# (`viewer/src/core/colormaps.ts`); what the manifest carries is these names.
 DEFAULT_CHANNEL_COLORMAPS = ("blue", "green", "red", "cyan", "magenta", "yellow")
 
 

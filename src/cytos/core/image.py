@@ -1,6 +1,6 @@
 """OME-Zarr pyramid data model: level metadata, level selection, and chunk-grid
 tiling math. Pure numpy and no GPU: drawing is the viewer's job, in
-`web/src/render/image.ts`.
+`viewer/src/render/image.ts`.
 
 Reuses OME-Zarr's own chunk grid as the tile grid rather than inventing a
 second one.
