@@ -129,8 +129,14 @@ function categoryCellColors(
 
 /** Per-vertex RGBA from a per-cell feature: the tile's vertex_cell_id
  * column indexes the feature values directly (row i of features.parquet is
- * dense cell id i). NaN — a cell with no value — draws dim, not absent.
- * `cells` is the categorical table above, when there is one. */
+ * dense cell id i). `cells` is the categorical table above, when there is
+ * one; a measurement reads the ramp here.
+ *
+ * A cell with no value lands at the *bottom of the ramp* rather than dropping
+ * out of it — `feature_colors` in `src/cytos/render/polygons.py` does the
+ * same, since a measurement's nulls are cells the left-join found nothing
+ * for, not a category of their own. Only a categorical feature gives them a
+ * colour that says "unassigned". */
 function vertexColors(
   vertexCellIds: Uint32Array,
   feature: Feature,
@@ -158,21 +164,11 @@ function vertexColors(
   const scale = 255 / (hi - lo);
   for (let i = 0; i < n; i++) {
     const v = feature.values[vertexCellIds[i]];
-    let r: number;
-    let g: number;
-    let b: number;
-    if (Number.isNaN(v)) {
-      [r, g, b] = UNASSIGNED_COLOR;
-    } else {
-      const q = Math.max(0, Math.min(255, Math.round((v - lo) * scale))) * 4;
-      r = lut[q];
-      g = lut[q + 1];
-      b = lut[q + 2];
-    }
+    const q = Number.isNaN(v) ? 0 : Math.max(0, Math.min(255, Math.round((v - lo) * scale))) * 4;
     const j = i * 4;
-    out[j] = r;
-    out[j + 1] = g;
-    out[j + 2] = b;
+    out[j] = lut[q];
+    out[j + 1] = lut[q + 1];
+    out[j + 2] = lut[q + 2];
     out[j + 3] = alpha;
   }
   return out;

@@ -52,6 +52,12 @@ const RAMPS: Record<string, RGB[]> = {
  * extension (see the note in render/image.ts). */
 export const RAMP_NAMES = ['gray', 'viridis', 'magma', 'plasma', 'inferno', 'cividis'];
 
+/** Ten distinct hues, and the default for colour-per-gene — `DEFAULT_PALETTE`
+ * in `src/cytos/render/points.py`. Points differ from cells here: a dot is a
+ * few pixels, and tab20's light/dark pairs are hard to tell apart that small.
+ */
+export const DEFAULT_POINT_PALETTE = 'tab10';
+
 /** matplotlib tab10 — the default qualitative palette for colour-per-gene,
  * same as `DEFAULT_PALETTE` in `src/cytos/render/points.py`. Ten distinct
  * hues; tab20 pairs light and dark of each, which is harder to tell apart
@@ -72,9 +78,11 @@ export const TAB10: RGB[] = [
 /** A gene's colour before anyone pins one: fixed by dense gene id, so it
  * never moves when the selection changes. The picker and the renderer both
  * call this, which is what keeps the circle in the list and the dot on the
- * slide the same colour. */
-export function presetGeneColor(geneId: number): string {
-  const [r, g, b] = TAB10[geneId % TAB10.length];
+ * slide the same colour. The palette is the layer's, so changing it moves
+ * every unpinned gene at once. */
+export function presetGeneColor(geneId: number, palette = DEFAULT_POINT_PALETTE): string {
+  const colors = paletteColors(palette);
+  const [r, g, b] = colors[geneId % colors.length];
   return `#${[r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
 }
 

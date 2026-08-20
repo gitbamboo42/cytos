@@ -83,7 +83,7 @@ function pointColors(tile: PointTile, settings: PointSettings): Uint8Array {
     const colorOf = (id: number) => {
       let rgb = resolved.get(id);
       if (!rgb) {
-        rgb = colorValueRgb(settings.gene_colors?.[id] ?? presetGeneColor(id));
+        rgb = colorValueRgb(settings.gene_colors?.[id] ?? presetGeneColor(id, settings.palette));
         resolved.set(id, rgb);
       }
       return rgb;
@@ -159,7 +159,7 @@ const styleState = new WeakMap<DeckPointTile, string>();
 function stylePointTile(tile: DeckPointTile, settings: PointSettings): string {
   // The gene selection is not in the key: changing it changes the layer id
   // (see `pointTileLayer`), so no tile survives it to be restyled.
-  const key = `${settings.size}|${settings.opacity}|${settings.color_mode}|${settings.colormap}|${JSON.stringify(settings.gene_colors ?? {})}`;
+  const key = `${settings.size}|${settings.opacity}|${settings.color_mode}|${settings.colormap}|${settings.palette}|${JSON.stringify(settings.gene_colors ?? {})}`;
   if (styleState.get(tile) !== key) {
     tile.attributes.getFillColor = {
       value: pointColors(tile.source, settings),
@@ -233,6 +233,7 @@ export function pointTileLayer(
         settings.opacity,
         settings.color_mode,
         settings.colormap,
+        settings.palette,
         JSON.stringify(settings.gene_colors ?? {}),
       ],
     },

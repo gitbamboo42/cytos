@@ -250,12 +250,23 @@ export function PointRow({
             onChange={(colormap) => onChange({ colormap })}
           />
         )}
+        {settings.color_mode === 'gene' && (
+          // Ten hues is not many when six genes are on at once and two of
+          // them land next to each other. Same list as the cell legend's,
+          // and as Qt's points panel.
+          <Dropdown
+            value={settings.palette}
+            options={PALETTE_NAMES}
+            onChange={(palette) => onChange({ palette })}
+          />
+        )}
       </div>
       {genes && (
         <GenePicker
           genes={genes}
           selected={settings.genes}
           byGene={settings.color_mode === 'gene'}
+          palette={settings.palette}
           colors={settings.gene_colors ?? {}}
           custom={custom}
           onChange={(next) => onChange({ genes: next })}

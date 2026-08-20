@@ -36,6 +36,7 @@ export function GenePicker({
   genes,
   selected,
   byGene,
+  palette,
   colors,
   custom,
   onChange,
@@ -44,6 +45,8 @@ export function GenePicker({
   genes: GeneTable;
   selected: number[] | null;
   byGene: boolean;
+  /** The layer's qualitative palette — the circles have to match the dots. */
+  palette: string;
   colors: Record<number, string>;
   custom: CustomColors;
   onChange: (next: number[] | null) => void;
@@ -166,13 +169,13 @@ export function GenePicker({
                     style={{
                       ...geneStyles.dot,
                       borderRadius: '50%',
-                      background: colors[gene.id] ?? presetGeneColor(gene.id),
+                      background: colors[gene.id] ?? presetGeneColor(gene.id, palette),
                     }}
                   />
                 ) : (
                   <ColorSwatch
                     round
-                    value={colors[gene.id] ?? presetGeneColor(gene.id)}
+                    value={colors[gene.id] ?? presetGeneColor(gene.id, palette)}
                     title={`${gene.name} color`}
                     custom={custom}
                     onChange={(value) => onColorChange({ ...colors, [gene.id]: value })}
